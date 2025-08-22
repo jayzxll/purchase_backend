@@ -1,14 +1,10 @@
-import express, { Request, Response, NextFunction } from 'express';
+import express from 'express';
+import { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
+import * as admin from 'firebase-admin';
 import { config } from 'dotenv';
-import admin from 'firebase-admin';
-
 // Load environment variables
 config();
-console.log('Env variables check:');
-console.log('FIREBASE_PROJECT_ID:', process.env.FIREBASE_PROJECT_ID ? '✅ Present' : '❌ Missing');
-console.log('FIREBASE_CLIENT_EMAIL:', process.env.FIREBASE_CLIENT_EMAIL ? '✅ Present' : '❌ Missing');
-console.log('FIREBASE_PRIVATE_KEY:', process.env.FIREBASE_PRIVATE_KEY ? '✅ Present' : '❌ Missing');
 
 // Define custom interface that extends Express Request
 interface CustomRequest extends Request {
