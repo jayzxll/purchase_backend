@@ -147,7 +147,17 @@ app.post('/api/lemonsqueezy/create-checkout', authMiddleware, async (req: Custom
       }
     );
 
-    const checkoutUrl = response.data.data.attributes.url;
+    // Type cast the response
+    interface LemonSqueezyResponse {
+      data: {
+        attributes: {
+          url: string;
+        };
+      };
+    }
+
+    const responseData = response.data as LemonSqueezyResponse;
+    const checkoutUrl = responseData.data.attributes.url;
 
     res.json({
       url: checkoutUrl,
@@ -382,7 +392,16 @@ app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest,
       paytr_token: paytrToken,
     });
 
-    if (response.data.status === 'success') {
+    // Type cast the response
+    interface PayTRResponse {
+      status: string;
+      token?: string;
+      reason?: string;
+    }
+
+    const responseData = response.data as PayTRResponse;
+
+    if (responseData.status === 'success') {
       // Save initial payment record
       if (admin.apps.length > 0) {
         await admin.firestore().collection('paytr_payments').doc(merchantOid).set({
@@ -398,11 +417,11 @@ app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest,
       }
 
       res.json({
-        token: response.data.token,
-        url: 'https://www.paytr.com/odeme/guvenli/' + response.data.token,
+        token: responseData.token,
+        url: 'https://www.paytr.com/odeme/guvenli/' + responseData.token,
       });
     } else {
-      throw new Error(response.data.reason || 'PayTR token generation failed');
+      throw new Error(responseData.reason || 'PayTR token generation failed');
     }
 
   } catch (error) {
@@ -647,191 +666,191 @@ app.post('/api/purchases/verify', authMiddleware, async (req: CustomRequest, res
         },
         email: userEmail || req.user.email,
         last_updated: new Date(),
-      }, { merge: true });
+        }, { merge: true });
 
-      // Also create a separate record in subscriptions collection
-      await admin.firestore().collection('subscriptions').doc(purchaseToken).set({
-        user_id: userId,
-        user_email: userEmail || req.user.email,
-        type: finalSubscriptionType,
-        purchase_date: purchaseDate,
-        expiry_date: expiryDate,
-        purchase_token: purchaseToken,
-        product_id: productId,
-        platform: platform,
-        status: 'active',
-        last_updated: new Date(),
-      });
-    }
-
-    res.json({
-      success: true,
-      message: 'Purchase verified successfully',
-      expiryDate: expiryDate.toISOString(),
-      subscriptionType: finalSubscriptionType,
-      purchaseDate: purchaseDate.toISOString(),
-      purchaseToken: purchaseToken
-    });
-
-  } catch (error) {
-    console.error('Purchase verification error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Internal server error' 
-    });
-  }
-});
-
-// Enhanced user subscription check endpoint
-app.get('/api/user/subscription', authMiddleware, async (req: CustomRequest, res: Response) => {
-  try {
-    const userId = req.user.uid;
-    
-    if (admin.apps.length > 0) {
-      const userDoc = await admin.firestore().collection('users').doc(userId).get();
-      const userData = userDoc.data();
-      const subscription = userData?.subscription;
-      
-      if (subscription) {
-        const expiryDate = new Date(subscription.expiry_date);
-        const isActive = new Date() < expiryDate;
-        
-        const remainingTime = expiryDate.getTime() - Date.now();
-        const remainingDays = Math.ceil(remainingTime / (1000 * 60 * 60 * 24));
-
-        res.json({
-          hasActiveSubscription: isActive,
-          subscriptionType: subscription.type,
-          expiryDate: expiryDate.toISOString(),
-          purchaseDate: subscription.purchase_date,
-          status: subscription.status,
-          remainingDays: remainingDays,
-          isExpiringSoon: remainingDays <= 7,
-          productId: subscription.product_id
+        // Also create a separate record in subscriptions collection
+        await admin.firestore().collection('subscriptions').doc(purchaseToken).set({
+          user_id: userId,
+          user_email: userEmail || req.user.email,
+          type: finalSubscriptionType,
+          purchase_date: purchaseDate,
+          expiry_date: expiryDate,
+          purchase_token: purchaseToken,
+          product_id: productId,
+          platform: platform,
+          status: 'active',
+          last_updated: new Date(),
         });
-        return;
       }
-    }
-    
-    res.json({ 
-      hasActiveSubscription: false,
-      subscriptionType: null,
-      expiryDate: null,
-      status: 'inactive'
-    });
 
-  } catch (error) {
-    console.error('Subscription check error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Failed to get subscription status' 
-    });
-  }
-});
+      res.json({
+        success: true,
+        message: 'Purchase verified successfully',
+        expiryDate: expiryDate.toISOString(),
+        subscriptionType: finalSubscriptionType,
+        purchaseDate: purchaseDate.toISOString(),
+        purchaseToken: purchaseToken
+      });
 
-// Feature availability check endpoint
-app.get('/api/user/features', authMiddleware, async (req: CustomRequest, res: Response) => {
-  try {
-    const userId = req.user.uid;
-    let hasActiveSubscription = false;
-    let subscriptionType = null;
-
-    if (admin.apps.length > 0) {
-      const userDoc = await admin.firestore().collection('users').doc(userId).get();
-      const subscription = userDoc.data()?.subscription;
-      
-      if (subscription) {
-        hasActiveSubscription = new Date() < new Date(subscription.expiry_date);
-        subscriptionType = subscription.type;
-      }
-    }
-
-    // Feature availability logic
-    const features = {
-      basic_matching: true, // Always available
-      messages: true, // Always available
-      ai_matches: hasActiveSubscription && (subscriptionType === 'premium' || subscriptionType === 'vip'),
-      lightning_matches: hasActiveSubscription && (subscriptionType === 'premium' || subscriptionType === 'vip'),
-      map_love: hasActiveSubscription && subscriptionType === 'vip',
-      popup_dating: hasActiveSubscription && subscriptionType === 'vip',
-      ai_dating_coach: hasActiveSubscription && subscriptionType === 'vip',
-    };
-
-    res.json({
-      hasActiveSubscription,
-      subscriptionType,
-      features,
-      timestamp: new Date().toISOString()
-    });
-
-  } catch (error) {
-    console.error('Features check error:', error);
-    res.status(500).json({ error: 'Failed to get features' });
-  }
-});
-
-// Get user's free matches count
-app.get('/api/user/free-matches', authMiddleware, async (req: CustomRequest, res: Response) => {
-  try {
-    const userId = req.user.uid;
-    const freeMatchesUsed = 0; // You'll implement this based on your tracking
-
-    res.json({
-      freeMatchesUsed,
-      freeMatchesRemaining: 50 - freeMatchesUsed,
-      hasUnlimited: false // Will be true if user has subscription
-    });
-
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to get free matches info' });
-  }
-});
-
-// Record free match usage
-app.post('/api/user/record-match', authMiddleware, async (req: CustomRequest, res: Response) => {
-  try {
-    const userId = req.user.uid;
-    // You'll implement match tracking logic here
-
-    res.json({ 
-      success: true, 
-      message: 'Match recorded' 
-    });
-
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to record match' });
-  }
-});
-
-// Admin endpoint to update subscription status
-app.post('/api/admin/update-subscription', async (req: Request, res: Response) => {
-  try {
-    // Basic admin auth (you should implement proper admin authentication)
-    const { adminKey, userId, status, expiryDate } = req.body;
-    
-    if (adminKey !== process.env.ADMIN_KEY) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    if (admin.apps.length > 0) {
-      await admin.firestore().collection('users').doc(userId).update({
-        'subscription.status': status,
-        'subscription.expiry_date': new Date(expiryDate),
-        'last_updated': new Date(),
+    } catch (error) {
+      console.error('Purchase verification error:', error);
+      res.status(500).json({ 
+        success: false, 
+        error: 'Internal server error' 
       });
     }
+  });
 
-    res.json({ success: true, message: 'Subscription updated' });
+  // Enhanced user subscription check endpoint
+  app.get('/api/user/subscription', authMiddleware, async (req: CustomRequest, res: Response) => {
+    try {
+      const userId = req.user.uid;
+      
+      if (admin.apps.length > 0) {
+        const userDoc = await admin.firestore().collection('users').doc(userId).get();
+        const userData = userDoc.data();
+        const subscription = userData?.subscription;
+        
+        if (subscription) {
+          const expiryDate = new Date(subscription.expiry_date);
+          const isActive = new Date() < expiryDate;
+          
+          const remainingTime = expiryDate.getTime() - Date.now();
+          const remainingDays = Math.ceil(remainingTime / (1000 * 60 * 60 * 24));
 
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to update subscription' });
-  }
-});
+          res.json({
+            hasActiveSubscription: isActive,
+            subscriptionType: subscription.type,
+            expiryDate: expiryDate.toISOString(),
+            purchaseDate: subscription.purchase_date,
+            status: subscription.status,
+            remainingDays: remainingDays,
+            isExpiringSoon: remainingDays <= 7,
+            productId: subscription.product_id
+          });
+          return;
+        }
+      }
+      
+      res.json({ 
+        hasActiveSubscription: false,
+        subscriptionType: null,
+        expiryDate: null,
+        status: 'inactive'
+      });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📊 Health check available at: http://localhost:${PORT}/health`);
-  console.log(`🔐 API endpoints ready for purchase verification`);
-  console.log(`🍋 Lemon Squeezy and PayTR endpoints configured`);
-});
+    } catch (error) {
+      console.error('Subscription check error:', error);
+      res.status(500).json({ 
+        success: false, 
+        error: 'Failed to get subscription status' 
+      });
+    }
+  });
+
+  // Feature availability check endpoint
+  app.get('/api/user/features', authMiddleware, async (req: CustomRequest, res: Response) => {
+    try {
+      const userId = req.user.uid;
+      let hasActiveSubscription = false;
+      let subscriptionType = null;
+
+      if (admin.apps.length > 0) {
+        const userDoc = await admin.firestore().collection('users').doc(userId).get();
+        const subscription = userDoc.data()?.subscription;
+        
+        if (subscription) {
+          hasActiveSubscription = new Date() < new Date(subscription.expiry_date);
+          subscriptionType = subscription.type;
+        }
+      }
+
+      // Feature availability logic
+      const features = {
+        basic_matching: true, // Always available
+        messages: true, // Always available
+        ai_matches: hasActiveSubscription && (subscriptionType === 'premium' || subscriptionType === 'vip'),
+        lightning_matches: hasActiveSubscription && (subscriptionType === 'premium' || subscriptionType === 'vip'),
+        map_love: hasActiveSubscription && subscriptionType === 'vip',
+        popup_dating: hasActiveSubscription && subscriptionType === 'vip',
+        ai_dating_coach: hasActiveSubscription && subscriptionType === 'vip',
+      };
+
+      res.json({
+        hasActiveSubscription,
+        subscriptionType,
+        features,
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error) {
+      console.error('Features check error:', error);
+      res.status(500).json({ error: 'Failed to get features' });
+    }
+  });
+
+  // Get user's free matches count
+  app.get('/api/user/free-matches', authMiddleware, async (req: CustomRequest, res: Response) => {
+    try {
+      const userId = req.user.uid;
+      const freeMatchesUsed = 0; // You'll implement this based on your tracking
+
+      res.json({
+        freeMatchesUsed,
+        freeMatchesRemaining: 50 - freeMatchesUsed,
+        hasUnlimited: false // Will be true if user has subscription
+      });
+
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to get free matches info' });
+    }
+  });
+
+  // Record free match usage
+  app.post('/api/user/record-match', authMiddleware, async (req: CustomRequest, res: Response) => {
+    try {
+      const userId = req.user.uid;
+      // You'll implement match tracking logic here
+
+      res.json({ 
+        success: true, 
+        message: 'Match recorded' 
+      });
+
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to record match' });
+    }
+  });
+
+  // Admin endpoint to update subscription status
+  app.post('/api/admin/update-subscription', async (req: Request, res: Response) => {
+    try {
+      // Basic admin auth (you should implement proper admin authentication)
+      const { adminKey, userId, status, expiryDate } = req.body;
+      
+      if (adminKey !== process.env.ADMIN_KEY) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+
+      if (admin.apps.length > 0) {
+        await admin.firestore().collection('users').doc(userId).update({
+          'subscription.status': status,
+          'subscription.expiry_date': new Date(expiryDate),
+          'last_updated': new Date(),
+        });
+      }
+
+      res.json({ success: true, message: 'Subscription updated' });
+
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to update subscription' });
+    }
+  });
+
+  // Start server
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`📊 Health check available at: http://localhost:${PORT}/health`);
+    console.log(`🔐 API endpoints ready for purchase verification`);
+    console.log(`🍋 Lemon Squeezy and PayTR endpoints configured`);
+  });
