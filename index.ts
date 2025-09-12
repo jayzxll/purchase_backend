@@ -415,7 +415,7 @@ const generatePayTRToken = (params: Record<string, string>): string => {
 function getPayTRPrice(subscriptionType: string): number {
   const prices: Record<string, number> = {
     // Basic Plans
-    'basic_monthly': 99,    // ₺0.99
+    'basic_monthly': 100,    // ₺0.99
     'basic_3months': 199,   // ₺1.99
     'basic_yearly': 899,    // ₺8.99
 
