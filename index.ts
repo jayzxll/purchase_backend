@@ -434,6 +434,7 @@ function getPayTRPrice(subscriptionType: string): number {
 }
 
 // Create PayTR payment
+// Create PayTR payment
 app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest, res: Response) => {
   console.log('=== PayTR Payment Creation Started ===');
   
@@ -480,6 +481,10 @@ app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest,
     // Generate a unique merchant order ID
     const merchantOid = `SUB${Date.now()}${Math.random().toString(36).substr(2, 9)}`;
     
+    // Create user_basket - This is the missing required parameter!
+    const subscriptionDisplayName = getSubscriptionDisplayName(subscriptionType);
+    const userBasket = `[[\"${subscriptionDisplayName}\",\"${(amount / 100).toFixed(2)}\",1]]`;
+    
     // Define payment parameters
     const paymentParams: Record<string, string> = {
       merchant_id: paytrMerchantId,
@@ -493,6 +498,7 @@ app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest,
       user_name: userName || 'Customer',
       user_address: 'Not specified',
       user_phone: 'Not specified',
+      user_basket: userBasket, // This was missing!
       merchant_ok_url: `${process.env.BASE_URL || 'https://purchasebackend-production.up.railway.app'}/payment-success?gateway=paytr&user_id=${userId}`,
       merchant_fail_url: `${process.env.BASE_URL || 'https://purchasebackend-production.up.railway.app'}/payment-fail?gateway=paytr&user_id=${userId}`,
       timeout_limit: '30',
@@ -507,6 +513,7 @@ app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest,
       email: paymentParams.email,
       payment_amount: paymentParams.payment_amount,
       currency: paymentParams.currency,
+      user_basket: paymentParams.user_basket,
     });
 
     // Generate token
@@ -559,6 +566,23 @@ app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest,
     res.status(500).json({ error: 'Failed to create PayTR payment: ' + (error.response?.data?.reason || error.message) });
   }
 });
+
+// Add this helper function to get display names for subscriptions
+function getSubscriptionDisplayName(subscriptionType: string): string {
+  const displayNames: Record<string, string> = {
+    'basic_monthly': 'Basic Monthly Subscription',
+    'basic_3months': 'Basic 3-Month Subscription',
+    'basic_yearly': 'Basic Yearly Subscription',
+    'premium_monthly': 'Premium Monthly Subscription',
+    'premium_3months': 'Premium 3-Month Subscription',
+    'premium_yearly': 'Premium Yearly Subscription',
+    'vip_monthly': 'VIP Monthly Subscription',
+    'vip_3months': 'VIP 3-Month Subscription',
+    'vip_yearly': 'VIP Yearly Subscription',
+  };
+
+  return displayNames[subscriptionType] || 'Subscription';
+}
 
 // Verify PayTR payment
 app.post('/api/paytr/verify-payment', authMiddleware, async (req: CustomRequest, res: Response) => {
