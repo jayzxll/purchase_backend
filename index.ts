@@ -434,8 +434,6 @@ function getPayTRPrice(subscriptionType: string): number {
 }
 
 // Create PayTR payment
-// Create PayTR payment
-// Create PayTR payment
 app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest, res: Response) => {
   console.log('=== PayTR Payment Creation Started ===');
   
@@ -475,11 +473,90 @@ app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest,
 
     console.log('PayTR configuration validated successfully');
 
-    // Rest of your existing PayTR code...
+    // Get price for the subscription type
+    const amount = getPayTRPrice(subscriptionType);
+    const currency = 'TL';
+
+    // Generate a unique merchant order ID
+    const merchantOid = `SUB${Date.now()}${Math.random().toString(36).substr(2, 9)}`;
     
+    // Define payment parameters
+    const paymentParams: Record<string, string> = {
+      merchant_id: paytrMerchantId,
+      user_ip: req.ip || (req.headers['x-forwarded-for'] as string) || '127.0.0.1',
+      merchant_oid: merchantOid,
+      email: userEmail || req.user.email || 'customer@example.com',
+      payment_amount: amount.toString(),
+      payment_type: 'card',
+      currency: currency,
+      test_mode: process.env.NODE_ENV === 'production' ? '0' : '1',
+      user_name: userName || 'Customer',
+      user_address: 'Not specified',
+      user_phone: 'Not specified',
+      merchant_ok_url: `${process.env.BASE_URL || 'https://purchasebackend-production.up.railway.app'}/payment-success?gateway=paytr&user_id=${userId}`,
+      merchant_fail_url: `${process.env.BASE_URL || 'https://purchasebackend-production.up.railway.app'}/payment-fail?gateway=paytr&user_id=${userId}`,
+      timeout_limit: '30',
+      lang: 'tr',
+      debug_on: '1',
+    };
+
+    console.log('Making PayTR API request with params:', {
+      merchant_id: paymentParams.merchant_id,
+      user_ip: paymentParams.user_ip,
+      merchant_oid: paymentParams.merchant_oid,
+      email: paymentParams.email,
+      payment_amount: paymentParams.payment_amount,
+      currency: paymentParams.currency,
+    });
+
+    // Generate token
+    const paytrToken = generatePayTRToken(paymentParams);
+    console.log('PayTR token generated, making API call...');
+
+    // Save initial payment record
+    if (admin.apps.length > 0) {
+      await admin.firestore().collection('paytr_payments').doc(merchantOid).set({
+        user_id: userId,
+        user_email: userEmail || req.user.email,
+        subscription_type: subscriptionType,
+        amount: amount / 100, // Convert back to full currency units
+        currency: currency,
+        merchant_oid: merchantOid,
+        status: 'pending',
+        created_at: new Date(),
+      });
+    }
+
+    // Make request to PayTR API
+    const response = await axios.post('https://www.paytr.com/odeme/api/get-token', {
+      ...paymentParams,
+      paytr_token: paytrToken,
+    }, {
+      timeout: 15000, // 15 seconds timeout
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      }
+    });
+
+    console.log('PayTR API response received:', response.status);
+    console.log('PayTR API response data:', response.data);
+
+    const responseData = response.data as PayTRResponse;
+
+    if (responseData.status === 'success') {
+      res.json({
+        token: responseData.token,
+        url: 'https://www.paytr.com/odeme/guvenli/' + responseData.token,
+        merchantOid: merchantOid,
+      });
+    } else {
+      console.error('PayTR API error:', responseData);
+      throw new Error(responseData.reason || 'PayTR token generation failed');
+    }
+
   } catch (error: any) {
-    console.error('PayTR endpoint error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('PayTR payment creation error:', error.response?.data || error.message);
+    res.status(500).json({ error: 'Failed to create PayTR payment: ' + (error.response?.data?.reason || error.message) });
   }
 });
 
