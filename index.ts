@@ -434,6 +434,7 @@ function getPayTRPrice(subscriptionType: string): number {
 }
 
 // Create PayTR payment
+// Create PayTR payment - FIXED VERSION
 app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest, res: Response) => {
   console.log('=== PayTR Payment Creation Started ===');
   
@@ -472,9 +473,6 @@ app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest,
     }
 
     console.log('PayTR configuration validated successfully');
-    console.log('PayTR Merchant ID:', paytrMerchantId);
-    console.log('PayTR Merchant Key length:', paytrMerchantKey.length);
-    console.log('PayTR Merchant Salt length:', paytrMerchantSalt.length);
 
     // Get price for the subscription type
     const amount = getPayTRPrice(subscriptionType);
@@ -483,46 +481,55 @@ app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest,
     // Generate a unique merchant order ID
     const merchantOid = `SUB${Date.now()}${Math.random().toString(36).substr(2, 9)}`;
     
-    // Create user_basket
+    // Create user_basket - FIXED: Proper JSON encoding
     const subscriptionDisplayName = getSubscriptionDisplayName(subscriptionType);
-    const userBasket = `[[\"${subscriptionDisplayName}\",\"${(amount / 100).toFixed(2)}\",1]]`;
+    const userBasket = JSON.stringify([[subscriptionDisplayName, (amount / 100).toFixed(2), 1]]);
     
-    // Define payment parameters
+    // Get client IP properly
+    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || 
+                    req.connection.remoteAddress || 
+                    req.socket.remoteAddress || 
+                    '127.0.0.1';
+
+    console.log('Client IP detected:', clientIp);
+    
+    // Define payment parameters - FIXED ORDER AND VALUES
     const paymentParams: Record<string, string> = {
       merchant_id: paytrMerchantId,
-      user_ip: req.ip || (req.headers['x-forwarded-for'] as string) || '127.0.0.1',
+      user_ip: clientIp,
       merchant_oid: merchantOid,
       email: userEmail || req.user.email || 'customer@example.com',
-      payment_amount: amount.toString(),
+      payment_amount: amount.toString(), // Amount in kuruş
       payment_type: 'card',
       currency: currency,
       test_mode: process.env.NODE_ENV === 'production' ? '0' : '1',
       non_3d: '0', // Enable 3D Secure
+      merchant_ok_url: `${process.env.BASE_URL || 'https://purchasebackend-production.up.railway.app'}/api/paytr/success?merchant_oid=${merchantOid}&user_id=${userId}`,
+      merchant_fail_url: `${process.env.BASE_URL || 'https://purchasebackend-production.up.railway.app'}/api/paytr/fail?merchant_oid=${merchantOid}&user_id=${userId}`,
       user_name: userName || 'Customer',
-      user_address: 'Not specified',
-      user_phone: 'Not specified',
+      user_address: 'Turkey', // More specific address
+      user_phone: '5555555555', // Valid Turkish phone format
       user_basket: userBasket,
       no_installment: '0', // Allow installments
-      max_installment: '12', // Maximum number of installments allowed
-      merchant_ok_url: `${process.env.BASE_URL || 'https://purchasebackend-production.up.railway.app'}/payment-success?gateway=paytr&user_id=${userId}`,
-      merchant_fail_url: `${process.env.BASE_URL || 'https://purchasebackend-production.up.railway.app'}/payment-fail?gateway=paytr&user_id=${userId}`,
+      max_installment: '12',
       timeout_limit: '30',
     };
 
-    console.log('Making PayTR API request with params:', {
+    console.log('Payment params prepared:', {
       merchant_id: paymentParams.merchant_id,
       user_ip: paymentParams.user_ip,
       merchant_oid: paymentParams.merchant_oid,
       email: paymentParams.email,
       payment_amount: paymentParams.payment_amount,
       currency: paymentParams.currency,
+      test_mode: paymentParams.test_mode,
       user_basket: paymentParams.user_basket,
     });
 
-    // Generate token
-    const paytrToken = generatePayTRToken(paymentParams);
-    console.log('PayTR token generated successfully');
-    console.log('Token length:', paytrToken.length);
+
+ // Generate token with FIXED algorithm
+    const paytrToken = generatePayTRTokenFixed(paymentParams);
+    console.log('PayTR token generated successfully, length:', paytrToken.length);
     
     // Save initial payment record
     if (admin.apps.length > 0) {
@@ -535,59 +542,112 @@ app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest,
         merchant_oid: merchantOid,
         status: 'pending',
         created_at: new Date(),
+        payment_params: paymentParams, // Store for debugging
       });
+      console.log('Payment record saved to Firestore');
     }
 
-    // Prepare form data for PayTR API
-    const formData = new URLSearchParams();
+    // Prepare form data for PayTR API - PROPER ENCODING
+    const formParams = new URLSearchParams();
+    
+    // Add all parameters in the exact order PayTR expects
     Object.entries(paymentParams).forEach(([key, value]) => {
-      formData.append(key, value);
+      formParams.append(key, value);
     });
-    formData.append('paytr_token', paytrToken);
+    formParams.append('paytr_token', paytrToken);
 
     console.log('PayTR form data prepared, making API call...');
+    console.log('Form data preview:', formParams.toString().substring(0, 200) + '...');
 
-    // Make request to PayTR API
-    const response = await axios.post(
+    // Make request to PayTR API with proper configuration
+     const response = await axios.post(
       'https://www.paytr.com/odeme/api/get-token', 
-      formData.toString(),
+      formParams,
       {
-        timeout: 15000, // 15 seconds timeout
+        timeout: 30000, // 30 seconds timeout
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
           'Accept': 'application/json',
-        }
+          'User-Agent': 'Mozilla/5.0 (compatible; PayTR-API-Client/1.0)',
+        },
+        validateStatus: (status) => status < 500, // Don't throw on 4xx errors
       }
     );
 
     console.log('PayTR API response received:', response.status);
+    console.log('PayTR API response headers:', response.headers);
     console.log('PayTR API response data:', response.data);
 
     const responseData = response.data as PayTRResponse;
 
-    if (responseData.status === 'success') {
+    if (responseData.status === 'success' && responseData.token) {
+      const paymentUrl = `https://www.paytr.com/odeme/guvenli/${responseData.token}`;
+      
+      // Update payment record with token
+      if (admin.apps.length > 0) {
+        await admin.firestore().collection('paytr_payments').doc(merchantOid).update({
+          paytr_token: responseData.token,
+          payment_url: paymentUrl,
+          status: 'token_generated',
+          updated_at: new Date(),
+        });
+      }
+
       res.json({
+        success: true,
         token: responseData.token,
-        url: 'https://www.paytr.com/odeme/guvenli/' + responseData.token,
+        url: paymentUrl,
         merchantOid: merchantOid,
+        amount: amount / 100,
+        currency: currency,
       });
     } else {
-      console.error('PayTR API error:', responseData);
+      console.error('PayTR API error response:', responseData);
+      
+      // Update payment record with error
+      if (admin.apps.length > 0) {
+        await admin.firestore().collection('paytr_payments').doc(merchantOid).update({
+          status: 'failed',
+          error_reason: responseData.reason || 'Unknown error',
+          updated_at: new Date(),
+        });
+      }
+      
       throw new Error(responseData.reason || 'PayTR token generation failed');
     }
 
   } catch (error: any) {
-    console.error('PayTR payment creation error:', error.response?.data || error.message);
-    res.status(500).json({ error: 'Failed to create PayTR payment: ' + (error.response?.data?.reason || error.message) });
+    console.error('PayTR payment creation error:', error);
+    
+    // Log detailed error information
+    if (error.response) {
+      console.error('Error response status:', error.response.status);
+      console.error('Error response headers:', error.response.headers);
+      console.error('Error response data:', error.response.data);
+    }
+    
+    const errorMessage = error.response?.data?.reason || 
+                        error.response?.data?.message || 
+                        error.message || 
+                        'Unknown PayTR API error';
+    
+    res.status(500).json({ 
+      error: 'Failed to create PayTR payment: ' + errorMessage,
+      debug: process.env.NODE_ENV !== 'production' ? {
+        originalError: error.message,
+        responseStatus: error.response?.status,
+        responseData: error.response?.data,
+      } : undefined
+    });
   }
 });
 
-// Generate PayTR token
-const generatePayTRToken = (params: Record<string, string>): string => {
-  // PayTR requires specific parameter order for token generation
-  const paramOrder = [
+// FIXED PayTR token generation function
+const generatePayTRTokenFixed = (params: Record<string, string>): string => {
+  // PayTR requires parameters in this exact order for hash calculation
+  const requiredOrder = [
     'merchant_id',
-    'user_ip',
+    'user_ip', 
     'merchant_oid',
     'email',
     'payment_amount',
@@ -598,7 +658,7 @@ const generatePayTRToken = (params: Record<string, string>): string => {
     'merchant_ok_url',
     'merchant_fail_url',
     'user_name',
-    'user_address',
+    'user_address', 
     'user_phone',
     'user_basket',
     'no_installment',
@@ -606,21 +666,74 @@ const generatePayTRToken = (params: Record<string, string>): string => {
     'timeout_limit'
   ];
 
-  // Build hash string in the correct order
-  const hashParts = [];
-  for (const key of paramOrder) {
-    if (params[key] !== undefined) {
-      hashParts.push(`${key}=${params[key]}`);
+  // Build hash string in the exact order PayTR expects
+  const hashParts: string[] = [];
+  for (const key of requiredOrder) {
+    if (params[key] !== undefined && params[key] !== null) {
+      hashParts.push(params[key]);
     }
   }
   
-  const hashString = hashParts.join('&') + paytrMerchantSalt;
+  // Join with PayTR salt - NO parameter names, just values
+  const hashString = hashParts.join('') + paytrMerchantSalt;
   
-  console.log('Token generation hash string (without salt):', hashParts.join('&'));
-  console.log('Full hash string length:', hashString.length);
+  console.log('Hash parts:', hashParts);
+  console.log('Hash string length (without salt):', hashParts.join('').length);
+  console.log('Hash string length (with salt):', hashString.length);
   
-  return crypto.createHmac('sha256', paytrMerchantKey).update(hashString).digest('base64');
+  // Generate HMAC-SHA256 hash
+  const token = crypto.createHmac('sha256', paytrMerchantKey).update(hashString).digest('base64');
+  
+  console.log('Generated token:', token.substring(0, 20) + '...');
+  
+  return token;
 };
+
+// Add PayTR success callback endpoint
+app.get('/api/paytr/success', async (req: Request, res: Response) => {
+  try {
+    const { merchant_oid, user_id } = req.query;
+    
+    console.log('PayTR success callback:', { merchant_oid, user_id });
+    
+    if (merchant_oid && admin.apps.length > 0) {
+      await admin.firestore().collection('paytr_payments').doc(merchant_oid as string).update({
+        status: 'user_returned_success',
+        success_callback_at: new Date(),
+      });
+    }
+    
+    // Redirect to your app's success page
+    res.redirect(`${process.env.FRONTEND_URL || 'https://yourdomain.com'}/payment-success?gateway=paytr&order=${merchant_oid}`);
+    
+  } catch (error: any) {
+    console.error('PayTR success callback error:', error);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://yourdomain.com'}/payment-error`);
+  }
+});
+
+// Add PayTR fail callback endpoint
+app.get('/api/paytr/fail', async (req: Request, res: Response) => {
+  try {
+    const { merchant_oid, user_id } = req.query;
+    
+    console.log('PayTR fail callback:', { merchant_oid, user_id });
+    
+    if (merchant_oid && admin.apps.length > 0) {
+      await admin.firestore().collection('paytr_payments').doc(merchant_oid as string).update({
+        status: 'user_returned_fail',
+        fail_callback_at: new Date(),
+      });
+    }
+    
+    // Redirect to your app's failure page
+    res.redirect(`${process.env.FRONTEND_URL || 'https://yourdomain.com'}/payment-failed?gateway=paytr&order=${merchant_oid}`);
+    
+  } catch (error: any) {
+    console.error('PayTR fail callback error:', error);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://yourdomain.com'}/payment-error`);
+  }
+});
 
 // Add this helper function to get display names for subscriptions
 function getSubscriptionDisplayName(subscriptionType: string): string {
@@ -728,33 +841,128 @@ app.post('/api/paytr/verify-payment', authMiddleware, async (req: CustomRequest,
 });
 
 // PayTR webhook handler
-app.post('/api/paytr/webhook', express.json(), async (req: Request, res: Response) => {
+// ENHANCED PayTR webhook handler with proper verification
+app.post('/api/paytr/webhook', express.raw({ type: 'application/x-www-form-urlencoded' }), async (req: Request, res: Response) => {
   try {
-    const { merchant_oid, status, total_amount, hash } = req.body;
-
-    // Verify the hash
-    const expectedHash = crypto
-      .createHash('sha256')
-      .update(`${merchant_oid}${paytrMerchantSalt}${status}${total_amount}`)
-      .digest('base64')
-      .toString();
-
-    if (hash !== expectedHash) {
-      return res.status(400).json({ error: 'Invalid hash' });
-    }
-
-    // Update payment status in database
-    await admin.firestore().collection('paytr_payments').doc(merchant_oid).update({
-      status: status,
-      updated_at: new Date(),
-      webhook_received: true,
+    console.log('=== PayTR Webhook Received ===');
+    console.log('Headers:', req.headers);
+    console.log('Raw body:', req.body.toString());
+    
+    // Parse form data
+    const formData = new URLSearchParams(req.body.toString());
+    const merchant_oid = formData.get('merchant_oid');
+    const status = formData.get('status');
+    const total_amount = formData.get('total_amount');
+    const hash = formData.get('hash');
+    
+    console.log('Parsed webhook data:', {
+      merchant_oid,
+      status, 
+      total_amount,
+      hash: hash?.substring(0, 20) + '...'
     });
 
-    res.json({ status: 'ok' });
+    if (!merchant_oid || !status || !total_amount || !hash) {
+      console.error('Missing required webhook parameters');
+      return res.status(400).send('Missing parameters');
+    }
+
+    // Verify the hash - PayTR webhook verification
+    const expectedHashData = merchant_oid + paytrMerchantSalt + status + total_amount;
+    const expectedHash = crypto
+      .createHmac('sha256', paytrMerchantKey)
+      .update(expectedHashData)
+      .digest('base64');
+
+    console.log('Hash verification:', {
+      received: hash.substring(0, 20) + '...',
+      expected: expectedHash.substring(0, 20) + '...',
+      matches: hash === expectedHash
+    });
+
+    if (hash !== expectedHash) {
+      console.error('Hash verification failed');
+      return res.status(400).send('Invalid hash');
+    }
+
+    // Get payment details from Firestore
+    let paymentData = null;
+    if (admin.apps.length > 0) {
+      const paymentDoc = await admin.firestore().collection('paytr_payments').doc(merchant_oid).get();
+      paymentData = paymentDoc.data();
+    }
+
+    if (!paymentData) {
+      console.error('Payment record not found:', merchant_oid);
+      return res.status(404).send('Payment not found');
+    }
+
+    // Update payment status
+    if (admin.apps.length > 0) {
+      await admin.firestore().collection('paytr_payments').doc(merchant_oid).update({
+        status: status,
+        total_amount: total_amount,
+        webhook_hash: hash,
+        webhook_received_at: new Date(),
+        updated_at: new Date(),
+      });
+    }
+
+    // If payment is successful, activate subscription
+    if (status === 'success') {
+      console.log('Payment successful, activating subscription');
+      
+      const userId = paymentData.user_id;
+      const subscriptionType = paymentData.subscription_type;
+      
+      // Calculate expiry date
+      const purchaseDate = new Date();
+      const expiryDate = calculateExpiryDate(subscriptionType);
+
+      // Update user subscription
+      if (admin.apps.length > 0) {
+        await admin.firestore().collection('users').doc(userId).set({
+          subscription: {
+            type: subscriptionType,
+            purchase_date: purchaseDate,
+            expiry_date: expiryDate,
+            purchase_token: merchant_oid,
+            product_id: `paytr_${subscriptionType}`,
+            platform: 'paytr',
+            status: 'active',
+            last_updated: new Date(),
+          },
+          accountPlan: subscriptionType, // For compatibility
+          expirationDate: expiryDate.toISOString(), // For compatibility
+          last_updated: new Date(),
+        }, { merge: true });
+
+        // Create subscription record
+        await admin.firestore().collection('subscriptions').doc(merchant_oid).set({
+          user_id: userId,
+          user_email: paymentData.user_email,
+          type: subscriptionType,
+          purchase_date: purchaseDate,
+          expiry_date: expiryDate,
+          purchase_token: merchant_oid,
+          product_id: `paytr_${subscriptionType}`,
+          platform: 'paytr',
+          status: 'active',
+          amount: parseFloat(total_amount) / 100,
+          currency: 'TL',
+          last_updated: new Date(),
+        });
+      }
+      
+      console.log('Subscription activated successfully');
+    }
+
+    // PayTR expects "OK" response for successful webhook processing
+    res.status(200).send('OK');
 
   } catch (error: any) {
-    console.error('PayTR webhook error:', error);
-    res.status(500).json({ error: 'Webhook processing failed' });
+    console.error('PayTR webhook processing error:', error);
+    res.status(500).send('Webhook processing failed');
   }
 });
 
