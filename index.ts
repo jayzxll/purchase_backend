@@ -435,6 +435,7 @@ function getPayTRPrice(subscriptionType: string): number {
 
 // Create PayTR payment
 // Create PayTR payment
+// Create PayTR payment
 app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest, res: Response) => {
   console.log('=== PayTR Payment Creation Started ===');
   
@@ -498,7 +499,9 @@ app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest,
       user_name: userName || 'Customer',
       user_address: 'Not specified',
       user_phone: 'Not specified',
-      user_basket: userBasket, // This was missing!
+      user_basket: userBasket,
+      no_installment: '0', // Allow installments (1 = no installments, 0 = allow installments)
+      max_installment: '12', // Maximum number of installments allowed
       merchant_ok_url: `${process.env.BASE_URL || 'https://purchasebackend-production.up.railway.app'}/payment-success?gateway=paytr&user_id=${userId}`,
       merchant_fail_url: `${process.env.BASE_URL || 'https://purchasebackend-production.up.railway.app'}/payment-fail?gateway=paytr&user_id=${userId}`,
       timeout_limit: '30',
@@ -583,6 +586,7 @@ function getSubscriptionDisplayName(subscriptionType: string): string {
 
   return displayNames[subscriptionType] || 'Subscription';
 }
+
 
 // Verify PayTR payment
 app.post('/api/paytr/verify-payment', authMiddleware, async (req: CustomRequest, res: Response) => {
