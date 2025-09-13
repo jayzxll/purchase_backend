@@ -435,7 +435,6 @@ function getPayTRPrice(subscriptionType: string): number {
 
 // Create PayTR payment
 // Create PayTR payment
-// Create PayTR payment
 app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest, res: Response) => {
   console.log('=== PayTR Payment Creation Started ===');
   
@@ -496,17 +495,16 @@ app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest,
       payment_type: 'card',
       currency: currency,
       test_mode: process.env.NODE_ENV === 'production' ? '0' : '1',
+      non_3d: '0', // Enable 3D Secure
       user_name: userName || 'Customer',
       user_address: 'Not specified',
       user_phone: 'Not specified',
       user_basket: userBasket,
-      no_installment: '0', // Allow installments (1 = no installments, 0 = allow installments)
+      no_installment: '0', // Allow installments
       max_installment: '12', // Maximum number of installments allowed
       merchant_ok_url: `${process.env.BASE_URL || 'https://purchasebackend-production.up.railway.app'}/payment-success?gateway=paytr&user_id=${userId}`,
       merchant_fail_url: `${process.env.BASE_URL || 'https://purchasebackend-production.up.railway.app'}/payment-fail?gateway=paytr&user_id=${userId}`,
       timeout_limit: '30',
-      lang: 'tr',
-      debug_on: '1',
     };
 
     console.log('Making PayTR API request with params:', {
