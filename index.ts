@@ -405,11 +405,11 @@ async function handleSubscriptionCancelled(event: any) {
 // ✅ PAYTR ENDPOINTS
 
 // Generate PayTR token
-const generatePayTRToken = (params: Record<string, string>): string => {
+/*const generatePayTRToken = (params: Record<string, string>): string => {
   const sortedParams = Object.keys(params).sort().map(key => `${key}=${params[key]}`);
   const hashString = sortedParams.join('&') + paytrMerchantSalt;
   return crypto.createHmac('sha256', paytrMerchantKey).update(hashString).digest('base64');
-};
+};*/
 
 // Helper function to get price for PayTR (in kuruş)
 function getPayTRPrice(subscriptionType: string): number {
@@ -433,7 +433,6 @@ function getPayTRPrice(subscriptionType: string): number {
   return prices[subscriptionType] || 99;
 }
 
-// Create PayTR payment
 // Create PayTR payment
 app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest, res: Response) => {
   console.log('=== PayTR Payment Creation Started ===');
@@ -473,6 +472,9 @@ app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest,
     }
 
     console.log('PayTR configuration validated successfully');
+    console.log('PayTR Merchant ID:', paytrMerchantId);
+    console.log('PayTR Merchant Key length:', paytrMerchantKey.length);
+    console.log('PayTR Merchant Salt length:', paytrMerchantSalt.length);
 
     // Get price for the subscription type
     const amount = getPayTRPrice(subscriptionType);
@@ -481,7 +483,7 @@ app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest,
     // Generate a unique merchant order ID
     const merchantOid = `SUB${Date.now()}${Math.random().toString(36).substr(2, 9)}`;
     
-    // Create user_basket - This is the missing required parameter!
+    // Create user_basket
     const subscriptionDisplayName = getSubscriptionDisplayName(subscriptionType);
     const userBasket = `[[\"${subscriptionDisplayName}\",\"${(amount / 100).toFixed(2)}\",1]]`;
     
@@ -519,8 +521,9 @@ app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest,
 
     // Generate token
     const paytrToken = generatePayTRToken(paymentParams);
-    console.log('PayTR token generated, making API call...');
-
+    console.log('PayTR token generated successfully');
+    console.log('Token length:', paytrToken.length);
+    
     // Save initial payment record
     if (admin.apps.length > 0) {
       await admin.firestore().collection('paytr_payments').doc(merchantOid).set({
@@ -535,16 +538,27 @@ app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest,
       });
     }
 
-    // Make request to PayTR API
-    const response = await axios.post('https://www.paytr.com/odeme/api/get-token', {
-      ...paymentParams,
-      paytr_token: paytrToken,
-    }, {
-      timeout: 15000, // 15 seconds timeout
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
-      }
+    // Prepare form data for PayTR API
+    const formData = new URLSearchParams();
+    Object.entries(paymentParams).forEach(([key, value]) => {
+      formData.append(key, value);
     });
+    formData.append('paytr_token', paytrToken);
+
+    console.log('PayTR form data prepared, making API call...');
+
+    // Make request to PayTR API
+    const response = await axios.post(
+      'https://www.paytr.com/odeme/api/get-token', 
+      formData.toString(),
+      {
+        timeout: 15000, // 15 seconds timeout
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'application/json',
+        }
+      }
+    );
 
     console.log('PayTR API response received:', response.status);
     console.log('PayTR API response data:', response.data);
@@ -568,6 +582,46 @@ app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest,
   }
 });
 
+// Generate PayTR token
+const generatePayTRToken = (params: Record<string, string>): string => {
+  // PayTR requires specific parameter order for token generation
+  const paramOrder = [
+    'merchant_id',
+    'user_ip',
+    'merchant_oid',
+    'email',
+    'payment_amount',
+    'payment_type',
+    'currency',
+    'test_mode',
+    'non_3d',
+    'merchant_ok_url',
+    'merchant_fail_url',
+    'user_name',
+    'user_address',
+    'user_phone',
+    'user_basket',
+    'no_installment',
+    'max_installment',
+    'timeout_limit'
+  ];
+
+  // Build hash string in the correct order
+  const hashParts = [];
+  for (const key of paramOrder) {
+    if (params[key] !== undefined) {
+      hashParts.push(`${key}=${params[key]}`);
+    }
+  }
+  
+  const hashString = hashParts.join('&') + paytrMerchantSalt;
+  
+  console.log('Token generation hash string (without salt):', hashParts.join('&'));
+  console.log('Full hash string length:', hashString.length);
+  
+  return crypto.createHmac('sha256', paytrMerchantKey).update(hashString).digest('base64');
+};
+
 // Add this helper function to get display names for subscriptions
 function getSubscriptionDisplayName(subscriptionType: string): string {
   const displayNames: Record<string, string> = {
@@ -584,7 +638,6 @@ function getSubscriptionDisplayName(subscriptionType: string): string {
 
   return displayNames[subscriptionType] || 'Subscription';
 }
-
 
 // Verify PayTR payment
 app.post('/api/paytr/verify-payment', authMiddleware, async (req: CustomRequest, res: Response) => {
