@@ -543,7 +543,7 @@ function getSubscriptionDisplayName(subscriptionType: string): string {
     });
 
     // Generate token with FIXED algorithm
-    const paytrToken = generatePayTRTokenFixed(paymentParams);
+    const paytrToken = generatePayTRToken(paymentParams);
     console.log('PayTR token generated successfully, length:', paytrToken.length);
     
     // Save initial payment record
@@ -673,50 +673,27 @@ function getSubscriptionDisplayName(subscriptionType: string): string {
 });
 
 // FIXED PayTR token generation function
-const generatePayTRTokenFixed = (params: Record<string, string>): string => {
+const generatePayTRToken = (params: Record<string, string>): string => {
   // PayTR requires parameters in this exact order for hash calculation
-  const requiredOrder = [
-    'merchant_id',
-    'user_ip', 
-    'merchant_oid',
-    'email',
-    'payment_amount',
-    'payment_type',
-    'currency',
-    'test_mode',
-    'non_3d',
-    'merchant_ok_url',
-    'merchant_fail_url',
-    'user_name',
-    'user_address', 
-    'user_phone',
-    'user_basket',
-    'no_installment',
-    'max_installment',
-    'timeout_limit'
-  ];
-
-  // Build hash string in the exact order PayTR expects
-  const hashParts: string[] = [];
-  for (const key of requiredOrder) {
-    if (params[key] !== undefined && params[key] !== null) {
-      hashParts.push(params[key]);
-    }
-  }
+  const hashString = 
+    params.merchant_id + 
+    params.user_ip + 
+    params.merchant_oid + 
+    params.email + 
+    params.payment_amount + 
+    params.payment_type + 
+    params.currency + 
+    params.test_mode + 
+    params.non_3d + 
+    params.merchant_ok_url + 
+    params.merchant_fail_url + 
+    params.user_name + 
+    params.user_address + 
+    params.user_phone + 
+    params.user_basket + 
+    paytrMerchantSalt;
   
-  // Join with PayTR salt - NO parameter names, just values
-  const hashString = hashParts.join('') + paytrMerchantSalt;
-  
-  console.log('Hash parts:', hashParts);
-  console.log('Hash string length (without salt):', hashParts.join('').length);
-  console.log('Hash string length (with salt):', hashString.length);
-  
-  // Generate HMAC-SHA256 hash
-  const token = crypto.createHmac('sha256', paytrMerchantKey).update(hashString).digest('base64');
-  
-  console.log('Generated token:', token.substring(0, 20) + '...');
-  
-  return token;
+  return crypto.createHmac('sha256', paytrMerchantKey).update(hashString).digest('base64');
 };
 
 // Add PayTR success callback endpoint
@@ -888,6 +865,19 @@ app.post('/api/paytr/webhook', express.raw({ type: 'application/x-www-form-urlen
     console.error('PayTR webhook processing error:', error);
     res.status(500).send('Webhook processing failed');
   }
+});
+
+// Add this debug endpoint to verify your configuration
+app.get('/api/debug/paytr-config', (req: Request, res: Response) => {
+  res.json({
+    hasMerchantId: !!process.env.PAYTR_MERCHANT_ID,
+    hasMerchantKey: !!process.env.PAYTR_MERCHANT_KEY,
+    hasMerchantSalt: !!process.env.PAYTR_MERCHANT_SALT,
+    merchantIdLength: process.env.PAYTR_MERCHANT_ID?.length,
+    merchantKeyLength: process.env.PAYTR_MERCHANT_KEY?.length,
+    merchantSaltLength: process.env.PAYTR_MERCHANT_SALT?.length,
+    nodeEnv: process.env.NODE_ENV,
+  });
 });
 
 // Android purchase verification
