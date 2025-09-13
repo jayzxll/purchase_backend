@@ -433,7 +433,6 @@ function getPayTRPrice(subscriptionType: string): number {
   return prices[subscriptionType] || 99;
 }
 
-// Create PayTR payment
 // Create PayTR payment - FIXED VERSION
 app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest, res: Response) => {
   console.log('=== PayTR Payment Creation Started ===');
