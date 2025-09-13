@@ -484,6 +484,23 @@ app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest,
     // Create user_basket - FIXED: Proper JSON encoding
     const subscriptionDisplayName = getSubscriptionDisplayName(subscriptionType);
     const userBasket = JSON.stringify([[subscriptionDisplayName, (amount / 100).toFixed(2), 1]]);
+
+// Helper function to get display names for subscriptions
+function getSubscriptionDisplayName(subscriptionType: string): string {
+  const displayNames: Record<string, string> = {
+    'basic_monthly': 'Basic Monthly Subscription',
+    'basic_3months': 'Basic 3-Month Subscription',
+    'basic_yearly': 'Basic Yearly Subscription',
+    'premium_monthly': 'Premium Monthly Subscription',
+    'premium_3months': 'Premium 3-Month Subscription',
+    'premium_yearly': 'Premium Yearly Subscription',
+    'vip_monthly': 'VIP Monthly Subscription',
+    'vip_3months': 'VIP 3-Month Subscription',
+    'vip_yearly': 'VIP Yearly Subscription',
+  };
+
+  return displayNames[subscriptionType] || 'Subscription';
+}
     
     // Get client IP properly
     const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || 
@@ -526,8 +543,7 @@ app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest,
       user_basket: paymentParams.user_basket,
     });
 
-
- // Generate token with FIXED algorithm
+    // Generate token with FIXED algorithm
     const paytrToken = generatePayTRTokenFixed(paymentParams);
     console.log('PayTR token generated successfully, length:', paytrToken.length);
     
@@ -557,10 +573,12 @@ app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest,
     formParams.append('paytr_token', paytrToken);
 
     console.log('PayTR form data prepared, making API call...');
-    console.log('Form data preview:', formParams.toString().substring(0, 200) + '...');
+    console.log('Request URL:', 'https://www.paytr.com/odeme/api/get-token');
+    console.log('Request method: POST');
+    console.log('Content-Type: application/x-www-form-urlencoded');
 
     // Make request to PayTR API with proper configuration
-     const response = await axios.post(
+    const response = await axios.post(
       'https://www.paytr.com/odeme/api/get-token', 
       formParams,
       {
@@ -574,11 +592,24 @@ app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest,
       }
     );
 
-    console.log('PayTR API response received:', response.status);
-    console.log('PayTR API response headers:', response.headers);
-    console.log('PayTR API response data:', response.data);
+    console.log('PayTR API Response Details:');
+    console.log('- Status:', response.status);
+    console.log('- Status Text:', response.statusText);
+    console.log('- Headers:', JSON.stringify(response.headers, null, 2));
+    console.log('- Data:', JSON.stringify(response.data, null, 2));
 
     const responseData = response.data as PayTRResponse;
+
+    // Check if response is success
+    if (response.status !== 200) {
+      console.error('PayTR API returned non-200 status:', response.status);
+      throw new Error(`PayTR API HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    if (!responseData || typeof responseData !== 'object') {
+      console.error('PayTR API returned invalid response format');
+      throw new Error('Invalid response format from PayTR API');
+    }
 
     if (responseData.status === 'success' && responseData.token) {
       const paymentUrl = `https://www.paytr.com/odeme/guvenli/${responseData.token}`;
@@ -735,112 +766,6 @@ app.get('/api/paytr/fail', async (req: Request, res: Response) => {
   }
 });
 
-// Add this helper function to get display names for subscriptions
-function getSubscriptionDisplayName(subscriptionType: string): string {
-  const displayNames: Record<string, string> = {
-    'basic_monthly': 'Basic Monthly Subscription',
-    'basic_3months': 'Basic 3-Month Subscription',
-    'basic_yearly': 'Basic Yearly Subscription',
-    'premium_monthly': 'Premium Monthly Subscription',
-    'premium_3months': 'Premium 3-Month Subscription',
-    'premium_yearly': 'Premium Yearly Subscription',
-    'vip_monthly': 'VIP Monthly Subscription',
-    'vip_3months': 'VIP 3-Month Subscription',
-    'vip_yearly': 'VIP Yearly Subscription',
-  };
-
-  return displayNames[subscriptionType] || 'Subscription';
-}
-
-// Verify PayTR payment
-app.post('/api/paytr/verify-payment', authMiddleware, async (req: CustomRequest, res: Response) => {
-  try {
-    const { merchant_oid, status, total_amount, hash } = req.body;
-    const userId = req.user.uid;
-
-    if (!merchant_oid || !status) {
-      return res.status(400).json({ error: 'Missing required fields' });
-    }
-
-    // Verify the hash
-    const expectedHash = crypto
-      .createHash('sha256')
-      .update(`${merchant_oid}${paytrMerchantSalt}${status}${total_amount}`)
-      .digest('base64')
-      .toString();
-
-    if (hash !== expectedHash) {
-      return res.status(400).json({ error: 'Invalid hash' });
-    }
-
-    if (status !== 'success') {
-      return res.status(400).json({ error: 'Payment failed' });
-    }
-
-    // Get payment details from Firestore
-    const paymentDoc = await admin.firestore().collection('paytr_payments').doc(merchant_oid).get();
-    const paymentData = paymentDoc.data();
-
-    if (!paymentData) {
-      return res.status(404).json({ error: 'Payment record not found' });
-    }
-
-    // Calculate expiry date based on subscription type
-    const purchaseDate = new Date();
-    const expiryDate = calculateExpiryDate(paymentData.subscription_type);
-
-    // Update payment status
-    await admin.firestore().collection('paytr_payments').doc(merchant_oid).update({
-      status: 'completed',
-      completed_at: new Date(),
-      hash: hash,
-    });
-
-    // Save subscription to user record
-    await admin.firestore().collection('users').doc(userId).set({
-      subscription: {
-        type: paymentData.subscription_type,
-        purchase_date: purchaseDate,
-        expiry_date: expiryDate,
-        purchase_token: merchant_oid,
-        product_id: `paytr_${paymentData.subscription_type}`,
-        platform: 'paytr',
-        status: 'active',
-        last_updated: new Date(),
-      },
-      accountPlan: paymentData.subscription_type, // For compatibility
-      expirationDate: expiryDate.toISOString(), // For compatibility
-      last_updated: new Date(),
-    }, { merge: true });
-
-    // Also create a separate record in subscriptions collection
-    await admin.firestore().collection('subscriptions').doc(merchant_oid).set({
-      user_id: userId,
-      user_email: paymentData.user_email,
-      type: paymentData.subscription_type,
-      purchase_date: purchaseDate,
-      expiry_date: expiryDate,
-      purchase_token: merchant_oid,
-      product_id: `paytr_${paymentData.subscription_type}`,
-      platform: 'paytr',
-      status: 'active',
-      last_updated: new Date(),
-    });
-
-    res.json({
-      success: true,
-      message: 'Payment verified successfully',
-      expiryDate: expiryDate.toISOString(),
-      subscriptionType: paymentData.subscription_type,
-    });
-
-  } catch (error: any) {
-    console.error('PayTR payment verification error:', error);
-    res.status(500).json({ error: 'Payment verification failed' });
-  }
-});
-
-// PayTR webhook handler
 // ENHANCED PayTR webhook handler with proper verification
 app.post('/api/paytr/webhook', express.raw({ type: 'application/x-www-form-urlencoded' }), async (req: Request, res: Response) => {
   try {
