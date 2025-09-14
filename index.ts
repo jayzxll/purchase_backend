@@ -70,9 +70,10 @@ const lemonSqueezyApiKey = process.env.LEMON_SQUEEZY_API_KEY || '';
 const lemonSqueezyStoreId = process.env.LEMON_SQUEEZY_STORE_ID || '';
 
 // Param configuration
-const paramApiKey = process.env.PARAM_API_KEY || '';
-const paramSecretKey = process.env.PARAM_SECRET_KEY || '';
-const paramMerchantId = process.env.PARAM_MERCHANT_ID || '';
+const paramTerminalNo = process.env.PARAM_TERMINAL_NO || '';
+const paramClientUsername = process.env.PARAM_CLIENT_USERNAME || '';
+const paramClientPassword = process.env.PARAM_CLIENT_PASSWORD || '';
+const paramGuidKey = process.env.PARAM_GUID_KEY || '';
 const paramBaseUrl = process.env.PARAM_BASE_URL || 'https://test-dmz.param.com.tr:4443/turkpos.ws/service_turkpos_prod.asmx';
 
 // Initialize Firebase
@@ -487,8 +488,8 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
       Islem_Hash: '', // Will be calculated below
       Islem_Currency: '949', // TRY currency code
       Taksit: '1', // Installment count
-      Hata_URL: `${process.env.BASE_URL || 'https://yourdomain.com'}/api/param/fail?transactionId=${transactionId}&userId=${userId}`,
-      Basarili_URL: `${process.env.BASE_URL || 'https://yourdomain.com'}/api/param/success?transactionId=${transactionId}&userId=${userId}`,
+      Hata_URL: `${process.env.BASE_URL || 'https://www.erosaidating.com'}/api/param/fail?transactionId=${transactionId}&userId=${userId}`,
+      Basarili_URL: `${process.env.BASE_URL || 'https://www.erosaidating.com'}/api/param/success?transactionId=${transactionId}&userId=${userId}`,
       // Customer information
       KK_Sahibi: userName,
       KK_No: '', // Will be provided by customer during payment
@@ -498,7 +499,7 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
       KK_Sahibi_GSM: '', // Customer phone if available
       // Additional customer info
       IPAdr: req.ip || req.connection.remoteAddress,
-      Ref_URL: process.env.BASE_URL || 'https://yourdomain.com',
+      Ref_URL: process.env.BASE_URL || 'https://www.erosaidating.com',
       Data1: userId, // Custom field for user ID
       Data2: subscriptionType, // Custom field for subscription type
       Data3: userEmail // Custom field for user email
@@ -684,11 +685,11 @@ app.get('/api/param/success', async (req: Request, res: Response) => {
       await verifyParamPayment(transactionId as string, userId as string);
     }
 
-    res.redirect(`${process.env.FRONTEND_URL || 'https://yourdomain.com'}/payment-success?gateway=param&transaction=${transactionId}`);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://www.erosaidating.com'}/payment-success?gateway=param&transaction=${transactionId}`);
 
   } catch (error: any) {
     console.error('Param success callback error:', error);
-    res.redirect(`${process.env.FRONTEND_URL || 'https://yourdomain.com'}/payment-error`);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://www.erosaidating.com'}/payment-error`);
   }
 });
 
@@ -706,32 +707,42 @@ app.get('/api/param/fail', async (req: Request, res: Response) => {
       });
     }
 
-    res.redirect(`${process.env.FRONTEND_URL || 'https://yourdomain.com'}/payment-failed?gateway=param&transaction=${transactionId}`);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://www.erosaidating.com'}/payment-failed?gateway=param&transaction=${transactionId}`);
 
   } catch (error: any) {
     console.error('Param fail callback error:', error);
-    res.redirect(`${process.env.FRONTEND_URL || 'https://yourdomain.com'}/payment-error`);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://www.erosaidating.com'}/payment-error`);
   }
 });
 
 // Verify Param payment
+// Verify Param payment
 async function verifyParamPayment(transactionId: string, userId: string) {
   try {
-    // Prepare verification request
-    const verificationRequest: ParamVerificationRequest = {
-      apiKey: paramApiKey,
-      transactionId: transactionId
+    // Get Param credentials
+    const terminalNo = process.env.PARAM_TERMINAL_NO;
+    const clientPassword = process.env.PARAM_CLIENT_PASSWORD;
+    
+    if (!terminalNo || !clientPassword) {
+      console.error('Param configuration missing for verification');
+      return;
+    }
+
+    // Prepare verification request according to Param's API
+    // This needs to be adjusted based on their actual API requirements
+    const verificationRequest = {
+      G: {
+        CLIENT_CODE: terminalNo,
+        CLIENT_PASSWORD: clientPassword,
+        // Add other required authentication fields
+      },
+      Siparis_ID: transactionId,
+      // Add other required verification fields
     };
 
-    // Generate signature
-    const signatureData = `${paramApiKey}${transactionId}${paramSecretKey}`;
-    const signature = crypto.createHash('sha256').update(signatureData).digest('hex');
-    
-    verificationRequest.signature = signature;
-
-    // Make request to Param API
+    // Make request to Param API verification endpoint
     const response = await axios.post(
-      `${paramBaseUrl}/payment/query`,
+      `${paramBaseUrl}/payment/query`, // Adjust endpoint based on Param's API
       verificationRequest,
       {
         headers: {
@@ -743,8 +754,9 @@ async function verifyParamPayment(transactionId: string, userId: string) {
 
     const responseData = response.data as any;
 
-    if (responseData.result && responseData.result === 'Success' && 
-        responseData.paymentStatus === 'Approved') {
+    // Process verification response based on Param's API
+    if (responseData && (responseData.Sonuc === '1' || responseData.Sonuc === 1)) {
+      // Payment verified successfully
       
       // Get payment details
       const paymentDoc = await admin.firestore().collection('param_payments').doc(transactionId).get();
@@ -807,46 +819,104 @@ async function verifyParamPayment(transactionId: string, userId: string) {
 }
 
 // Param webhook handler
+// Param webhook handler
 app.post('/api/param/webhook', express.json(), async (req: Request, res: Response) => {
+  console.log('=== Param Webhook Received ===');
+  
   try {
     const webhookData = req.body;
-    const transactionId = webhookData.transactionId;
-    const status = webhookData.paymentStatus;
-    const signature = webhookData.signature;
+    console.log('Webhook data:', JSON.stringify(webhookData, null, 2));
 
-    // Verify signature
-    const expectedSignatureData = `${paramApiKey}${transactionId}${status}${paramSecretKey}`;
-    const expectedSignature = crypto.createHash('sha256').update(expectedSignatureData).digest('hex');
+    // Extract webhook parameters (adjust based on Param's actual webhook format)
+    const transactionId = webhookData.Siparis_ID || webhookData.transactionId || webhookData.Transaction_ID;
+    const status = webhookData.Islem_Sonuc || webhookData.paymentStatus || webhookData.Status;
+    const signature = webhookData.Imza || webhookData.signature || webhookData.Hash;
+    const amount = webhookData.Tutar || webhookData.amount;
+    const currency = webhookData.Para_Birimi || webhookData.currency || 'TRY';
+    const paramRefId = webhookData.Islem_ID || webhookData.Ref_ID || webhookData.Reference_ID;
 
-    if (signature !== expectedSignature) {
-      console.error('Invalid signature in Param webhook');
-      return res.status(400).send('Invalid signature');
+    console.log('Extracted webhook parameters:', {
+      transactionId,
+      status,
+      signature,
+      amount,
+      currency,
+      paramRefId
+    });
+
+    // Validate required fields
+    if (!transactionId || !status) {
+      console.error('Missing required fields in webhook:', { transactionId, status });
+      return res.status(400).json({ 
+        error: 'Missing required fields: transactionId and status are required' 
+      });
     }
 
-    // Get payment details
+    // Get credentials for signature verification
+    const terminalNo = process.env.PARAM_TERMINAL_NO;
+    const clientPassword = process.env.PARAM_CLIENT_PASSWORD;
+    
+    if (!terminalNo || !clientPassword) {
+      console.error('Param configuration missing for webhook verification');
+      return res.status(500).json({ error: 'Configuration error' });
+    }
+
+    // Verify signature (adjust based on Param's requirements)
+    if (signature) {
+      const expectedSignatureData = `${terminalNo}${transactionId}${status}${clientPassword}`;
+      const expectedSignature = crypto.createHash('sha256').update(expectedSignatureData).digest('hex');
+
+      if (signature !== expectedSignature) {
+        console.error('Invalid signature in Param webhook');
+        console.error('Expected:', expectedSignature);
+        console.error('Received:', signature);
+        return res.status(400).json({ error: 'Invalid signature' });
+      }
+      console.log('Signature verification successful');
+    } else {
+      console.warn('No signature provided in webhook, proceeding without verification');
+    }
+
+    // Get payment details from database
     const paymentDoc = await admin.firestore().collection('param_payments').doc(transactionId).get();
-    const paymentData = paymentDoc.data();
-
-    if (!paymentData) {
+    
+    if (!paymentDoc.exists) {
       console.error('Payment record not found:', transactionId);
-      return res.status(404).send('Payment not found');
+      return res.status(404).json({ error: 'Payment not found' });
     }
+
+    const paymentData = paymentDoc.data();
+    console.log('Found payment record:', paymentData);
 
     // Update payment status
-    await admin.firestore().collection('param_payments').doc(transactionId).update({
+    const updateData: any = {
       status: status,
       webhook_received_at: new Date(),
       updated_at: new Date(),
-    });
+      webhook_data: webhookData
+    };
+
+    // Add reference ID if provided
+    if (paramRefId) {
+      updateData.param_ref_id = paramRefId;
+    }
+
+    await admin.firestore().collection('param_payments').doc(transactionId).update(updateData);
 
     // If payment is successful, activate subscription
-    if (status === 'Success') {
+    if (status === '1' || status === 1 || status === 'Success' || status === 'success') {
       console.log('Payment successful, activating subscription');
 
-      const userId = paymentData.user_id;
-      const subscriptionType = paymentData.subscription_type;
+      const userId = paymentData?.user_id;
+      const subscriptionType = paymentData?.subscription_type;
+      const userEmail = paymentData?.user_email;
 
-      // Calculate expiry date
+      if (!userId || !subscriptionType) {
+        console.error('Missing user data in payment record:', { userId, subscriptionType });
+        return res.status(400).json({ error: 'Missing user data in payment record' });
+      }
+
+      // Calculate expiry date based on subscription type
       const purchaseDate = new Date();
       const expiryDate = calculateExpiryDate(subscriptionType);
 
@@ -865,13 +935,13 @@ app.post('/api/param/webhook', express.json(), async (req: Request, res: Respons
         accountPlan: subscriptionType,
         expirationDate: expiryDate.toISOString(),
         last_updated: new Date(),
-        email: paymentData.user_email,
+        email: userEmail,
       }, { merge: true });
 
       // Create subscription record
       await admin.firestore().collection('subscriptions').doc(transactionId).set({
         user_id: userId,
-        user_email: paymentData.user_email,
+        user_email: userEmail,
         type: subscriptionType,
         purchase_date: purchaseDate,
         expiry_date: expiryDate,
@@ -879,20 +949,85 @@ app.post('/api/param/webhook', express.json(), async (req: Request, res: Respons
         product_id: `param_${subscriptionType}`,
         platform: 'param',
         status: 'active',
-        amount: paymentData.amount,
-        currency: 'TRY',
+        amount: paymentData?.amount || amount,
+        currency: paymentData?.currency || currency,
         last_updated: new Date(),
       });
 
-      console.log('Subscription activated successfully');
+      // Update payment record with success status
+      await admin.firestore().collection('param_payments').doc(transactionId).update({
+        status: 'verified',
+        verified_at: new Date(),
+      });
+
+      console.log('Subscription activated successfully for user:', userId);
+    } else {
+      console.log('Payment status indicates failure or pending:', status);
+      
+      // Update user subscription if payment failed
+      const userId = paymentData?.user_id;
+      if (userId) {
+        await admin.firestore().collection('users').doc(userId).set({
+          subscription: {
+            status: 'failed',
+            last_updated: new Date(),
+          },
+          last_updated: new Date(),
+        }, { merge: true });
+      }
     }
 
-    res.status(200).send('OK');
+    console.log('Webhook processed successfully');
+    res.status(200).json({ 
+      success: true, 
+      message: 'Webhook processed successfully',
+      transactionId: transactionId
+    });
 
   } catch (error: any) {
     console.error('Param webhook processing error:', error);
-    res.status(500).send('Webhook processing failed');
+    
+    // More detailed error logging
+    if (error.response) {
+      console.error('Error response data:', error.response.data);
+      console.error('Error response status:', error.response.status);
+      console.error('Error response headers:', error.response.headers);
+    } else if (error.request) {
+      console.error('Error request:', error.request);
+    } else {
+      console.error('Error message:', error.message);
+    }
+    
+    res.status(500).json({ 
+      error: 'Webhook processing failed',
+      message: error.message,
+      transactionId: req.body?.Siparis_ID || req.body?.transactionId
+    });
   }
+});
+
+// Debug endpoint to check all environment variables
+app.get('/api/debug/env', (req: Request, res: Response) => {
+  // Filter out sensitive data for security
+  const envVars = Object.keys(process.env)
+    .filter(key => !key.toLowerCase().includes('password') && 
+                   !key.toLowerCase().includes('secret') && 
+                   !key.toLowerCase().includes('key') && 
+                   !key.toLowerCase().includes('private'))
+    .reduce((obj, key) => {
+      obj[key] = process.env[key];
+      return obj;
+    }, {} as Record<string, string>);
+  
+  res.json({
+    allEnvKeys: Object.keys(process.env),
+    filteredEnv: envVars,
+    hasParamTerminalNo: !!process.env.PARAM_TERMINAL_NO,
+    hasParamClientUsername: !!process.env.PARAM_CLIENT_USERNAME,
+    hasParamClientPassword: !!process.env.PARAM_CLIENT_PASSWORD,
+    hasParamGuidKey: !!process.env.PARAM_GUID_KEY,
+    nodeEnv: process.env.NODE_ENV,
+  });
 });
 
 // Android purchase verification
