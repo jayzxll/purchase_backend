@@ -14,6 +14,18 @@ interface CustomRequest extends Request {
   user?: any;
 }
 
+interface ParamApiResponse {
+  Sonuc?: number | string;
+  Sonuc_Aciklama?: string;
+  Redirect_URL?: string;
+  Payment_URL?: string;
+  Islem_ID?: string;
+  Ref_ID?: string;
+  Error_Message?: string;
+  Mesaj?: string;
+  [key: string]: any; // For any additional properties
+}
+
 // Define interfaces for Param payment requests
 interface ParamPaymentRequest {
   apiKey: string;
@@ -431,8 +443,14 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
   console.log('=== Param Payment Creation Started ===');
 
   try {
+    // Get Param credentials from environment (updated with your actual credentials)
+    const terminalNo = process.env.PARAM_TERMINAL_NO;
+    const clientUsername = process.env.PARAM_CLIENT_USERNAME;
+    const clientPassword = process.env.PARAM_CLIENT_PASSWORD;
+    const guidKey = process.env.PARAM_GUID_KEY;
+
     // Validate Param configuration
-    if (!paramApiKey || !paramSecretKey || !paramMerchantId) {
+    if (!terminalNo || !clientUsername || !clientPassword || !guidKey) {
       console.error('Param configuration missing');
       return res.status(500).json({ error: 'Param configuration missing' });
     }
@@ -450,81 +468,162 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
     // Generate unique transaction ID
     const transactionId = `TRX${Date.now()}${Math.random().toString(36).substr(2, 9)}`;
 
-    // Prepare Param payment request
-    const paymentRequest: ParamPaymentRequest = {
-      apiKey: paramApiKey,
-      transactionId: transactionId,
-      customerId: userId,
-      customerEmail: userEmail,
-      customerName: userName,
-      totalAmount: amount,
-      currency: 'TRY',
-      installmentCount: 1, // No installment
-      successUrl: `${process.env.BASE_URL || 'https://yourdomain.com'}/api/param/success?transactionId=${transactionId}&userId=${userId}`,
-      failUrl: `${process.env.BASE_URL || 'https://yourdomain.com'}/api/param/fail?transactionId=${transactionId}&userId=${userId}`,
-      language: 'tr',
-      products: [
-        {
-          name: getSubscriptionDisplayName(subscriptionType),
-          price: amount,
-          quantity: 1
-        }
-      ]
+    // Prepare Param payment request according to their API documentation
+    // Note: This structure needs to be adjusted based on Param's actual API requirements
+    const paymentRequest = {
+      G: {
+        CLIENT_CODE: terminalNo,
+        CLIENT_USERNAME: clientUsername,
+        CLIENT_PASSWORD: clientPassword,
+        GUID: guidKey
+      },
+      // These fields need to be adjusted based on Param's API documentation
+      Islem_Tipi: 'Satis', // Transaction type: Sale
+      Siparis_ID: transactionId,
+      Siparis_Aciklama: getSubscriptionDisplayName(subscriptionType),
+      Islem_Guvenlik_Tip: '3D', // 3D Secure
+      Islem_Tutar: amount.toString(),
+      Toplam_Tutar: amount.toString(),
+      Islem_Hash: '', // Will be calculated below
+      Islem_Currency: '949', // TRY currency code
+      Taksit: '1', // Installment count
+      Hata_URL: `${process.env.BASE_URL || 'https://yourdomain.com'}/api/param/fail?transactionId=${transactionId}&userId=${userId}`,
+      Basarili_URL: `${process.env.BASE_URL || 'https://yourdomain.com'}/api/param/success?transactionId=${transactionId}&userId=${userId}`,
+      // Customer information
+      KK_Sahibi: userName,
+      KK_No: '', // Will be provided by customer during payment
+      KK_SK_Ay: '',
+      KK_SK_Yil: '',
+      KK_CVC: '',
+      KK_Sahibi_GSM: '', // Customer phone if available
+      // Additional customer info
+      IPAdr: req.ip || req.connection.remoteAddress,
+      Ref_URL: process.env.BASE_URL || 'https://yourdomain.com',
+      Data1: userId, // Custom field for user ID
+      Data2: subscriptionType, // Custom field for subscription type
+      Data3: userEmail // Custom field for user email
     };
 
-    // Generate signature
-    const signatureData = `${paramApiKey}${transactionId}${amount}${paramSecretKey}`;
-    const signature = crypto.createHash('sha256').update(signatureData).digest('hex');
-    
-    paymentRequest.signature = signature;
+    // Generate hash/signature (adjust based on Param's requirements)
+    // This is an example - you need to check Param's documentation for the correct hash generation method
+    const hashData = `${terminalNo}${transactionId}${amount}${clientPassword}${guidKey}`;
+    const hash = crypto.createHash('sha1').update(hashData).digest('base64');
+    paymentRequest.Islem_Hash = hash;
+
+    console.log('Making Param API request to:', process.env.PARAM_BASE_URL);
+    console.log('Request body:', JSON.stringify(paymentRequest, null, 2));
 
     // Make request to Param API
     const response = await axios.post(
-      `${paramBaseUrl}/payment/create`,
+      process.env.PARAM_BASE_URL || 'https://test-dmz.param.com.tr:4443/turkpos.ws/service_turkpos_prod.asmx',
       paymentRequest,
       {
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
+          'User-Agent': 'ErosAI/1.0'
         },
+        timeout: 30000 // 30 second timeout
       }
     );
 
-    const responseData = response.data as any;
+    console.log('Param API response status:', response.status);
+    console.log('Param API response data:', response.data);
 
-    if (responseData.result && responseData.result === 'Success') {
+    // Type cast the response data to our interface
+    const responseData = response.data as ParamApiResponse;
+
+    // Process response based on Param's actual response format
+    // You need to adjust this based on their actual API response structure
+    if (responseData && (responseData.Sonuc === '1' || responseData.Sonuc === 1)) {
+      // Success case
+      
       // Save payment record
       if (admin.apps.length > 0) {
         await admin.firestore().collection('param_payments').doc(transactionId).set({
           user_id: userId,
           user_email: userEmail,
+          user_name: userName,
           subscription_type: subscriptionType,
           amount: amount,
           currency: 'TRY',
           transaction_id: transactionId,
+          param_ref_id: responseData.Islem_ID || responseData.Ref_ID || '',
           status: 'pending',
           created_at: new Date(),
+          payment_request: paymentRequest,
+          payment_response: responseData
         });
       }
 
       res.json({
         success: true,
-        paymentUrl: responseData.paymentUrl,
+        paymentUrl: responseData.Redirect_URL || responseData.Payment_URL || '',
         transactionId: transactionId,
+        paramRefId: responseData.Islem_ID || responseData.Ref_ID || ''
       });
     } else {
-      throw new Error(responseData.errorMessage || 'Param payment creation failed');
+      // Error case
+      const errorMessage = responseData.Sonuc_Aciklama || 
+                          responseData.Error_Message || 
+                          responseData.Mesaj || 
+                          'Param payment creation failed';
+      
+      console.error('Param payment failed:', errorMessage);
+      
+      // Save failed attempt
+      if (admin.apps.length > 0) {
+        await admin.firestore().collection('param_payments').doc(transactionId).set({
+          user_id: userId,
+          user_email: userEmail,
+          user_name: userName,
+          subscription_type: subscriptionType,
+          amount: amount,
+          currency: 'TRY',
+          transaction_id: transactionId,
+          status: 'failed',
+          error_message: errorMessage,
+          created_at: new Date(),
+          payment_request: paymentRequest,
+          payment_response: responseData
+        });
+      }
+      
+      throw new Error(errorMessage);
     }
 
   } catch (error: any) {
     console.error('Param payment creation error:', error);
     
-    const errorMessage = error.response?.data?.errorMessage ||
-      error.message ||
-      'Unknown Param API error';
+    let errorMessage = 'Unknown Param API error';
+    let statusCode = 500;
+    
+    if (error.response) {
+      // The request was made and the server responded with a status code
+      // that falls out of the range of 2xx
+      console.error('Param API error response:', error.response.data);
+      console.error('Param API error status:', error.response.status);
+      
+      statusCode = error.response.status;
+      
+      // Type cast the error response data
+      const errorData = error.response.data as ParamApiResponse;
+      errorMessage = errorData.Error_Message || 
+                    errorData.Sonuc_Aciklama ||
+                    errorData.Mesaj || 
+                    `Request failed with status code ${error.response.status}`;
+    } else if (error.request) {
+      // The request was made but no response was received
+      console.error('No response received from Param API');
+      errorMessage = 'No response received from payment provider';
+    } else {
+      // Something happened in setting up the request that triggered an Error
+      errorMessage = error.message;
+    }
 
-    res.status(500).json({
+    res.status(statusCode).json({
       error: 'Failed to create Param payment: ' + errorMessage,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 });
@@ -1154,10 +1253,11 @@ app.post('/api/admin/update-subscription', async (req: Request, res: Response) =
 // Debug endpoint to check Param configuration
 app.get('/api/debug/param-config', (req: Request, res: Response) => {
   res.json({
-    hasApiKey: !!process.env.PARAM_API_KEY,
-    hasSecretKey: !!process.env.PARAM_SECRET_KEY,
-    hasMerchantId: !!process.env.PARAM_MERCHANT_ID,
-    apiKeyValue: process.env.PARAM_API_KEY ? 'SET' : 'NOT SET',
+    hasTerminalNo: !!process.env.PARAM_TERMINAL_NO,
+    hasClientUsername: !!process.env.PARAM_CLIENT_USERNAME,
+    hasClientPassword: !!process.env.PARAM_CLIENT_PASSWORD,
+    hasGuidKey: !!process.env.PARAM_GUID_KEY,
+    terminalNoValue: process.env.PARAM_TERMINAL_NO ? 'SET' : 'NOT SET',
     nodeEnv: process.env.NODE_ENV,
     allEnvKeys: Object.keys(process.env).filter(key => key.includes('PARAM')),
   });
