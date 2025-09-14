@@ -14,11 +14,40 @@ interface CustomRequest extends Request {
   user?: any;
 }
 
-// Define PayTR response interface
-interface PayTRResponse {
-  status: string;
-  token?: string;
-  reason?: string;
+// Define interfaces for Param payment requests
+interface ParamPaymentRequest {
+  apiKey: string;
+  transactionId: string;
+  customerId: any;
+  customerEmail: any;
+  customerName: any;
+  totalAmount: number;
+  currency: string;
+  installmentCount: number;
+  successUrl: string;
+  failUrl: string;
+  language: string;
+  products: Array<{
+    name: string;
+    price: number;
+    quantity: number;
+  }>;
+  signature?: string;
+}
+
+interface ParamVerificationRequest {
+  apiKey: string;
+  transactionId: string;
+  signature?: string;
+}
+
+// Define Lemon Squeezy response interface
+interface LemonSqueezyResponse {
+  data: {
+    attributes: {
+      url: string;
+    };
+  };
 }
 
 const app = express();
@@ -28,10 +57,11 @@ const PORT = process.env.PORT || 3000;
 const lemonSqueezyApiKey = process.env.LEMON_SQUEEZY_API_KEY || '';
 const lemonSqueezyStoreId = process.env.LEMON_SQUEEZY_STORE_ID || '';
 
-// PayTR configuration
-const paytrMerchantId = process.env.PAYTR_MERCHANT_ID || '';
-const paytrMerchantKey = process.env.PAYTR_MERCHANT_KEY || '';
-const paytrMerchantSalt = process.env.PAYTR_MERCHANT_SALT || '';
+// Param configuration
+const paramApiKey = process.env.PARAM_API_KEY || '';
+const paramSecretKey = process.env.PARAM_SECRET_KEY || '';
+const paramMerchantId = process.env.PARAM_MERCHANT_ID || '';
+const paramBaseUrl = process.env.PARAM_BASE_URL || 'https://test-dmz.param.com.tr:4443/turkpos.ws/service_turkpos_prod.asmx';
 
 // Initialize Firebase
 if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
@@ -169,14 +199,6 @@ app.post('/api/lemonsqueezy/create-checkout', authMiddleware, async (req: Custom
     );
 
     // Type cast the response
-    interface LemonSqueezyResponse {
-      data: {
-        attributes: {
-          url: string;
-        };
-      };
-    }
-
     const responseData = response.data as LemonSqueezyResponse;
     const checkoutUrl = responseData.data.attributes.url;
 
@@ -402,46 +424,17 @@ async function handleSubscriptionCancelled(event: any) {
   }
 }
 
-// ✅ PAYTR ENDPOINTS
+// ✅ PARAM ENDPOINTS
 
-// Generate PayTR token
-/*const generatePayTRToken = (params: Record<string, string>): string => {
-  const sortedParams = Object.keys(params).sort().map(key => `${key}=${params[key]}`);
-  const hashString = sortedParams.join('&') + paytrMerchantSalt;
-  return crypto.createHmac('sha256', paytrMerchantKey).update(hashString).digest('base64');
-};*/
-
-// Helper function to get price for PayTR (in kuruş)
-function getPayTRPrice(subscriptionType: string): number {
-  const prices: Record<string, number> = {
-    // Basic Plans
-    'basic_monthly': 100,    // ₺0.99
-    'basic_3months': 199,   // ₺1.99
-    'basic_yearly': 899,    // ₺8.99
-
-    // Premium Plans
-    'premium_monthly': 299, // ₺2.99
-    'premium_3months': 649, // ₺6.49
-    'premium_yearly': 1999, // ₺19.99
-
-    // VIP Plans
-    'vip_monthly': 749,     // ₺7.49
-    'vip_3months': 1499,    // ₺14.99
-    'vip_yearly': 2599,     // ₺25.99
-  };
-
-  return prices[subscriptionType] || 99;
-}
-
-// Create PayTR payment - FIXED VERSION
-app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest, res: Response) => {
-  console.log('=== PayTR Payment Creation Started ===');
+// Create Param payment
+app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest, res: Response) => {
+  console.log('=== Param Payment Creation Started ===');
 
   try {
-    // Validate PayTR configuration
-    if (!paytrMerchantId || !paytrMerchantKey || !paytrMerchantSalt) {
-      console.error('PayTR configuration missing');
-      return res.status(500).json({ error: 'PayTR configuration missing' });
+    // Validate Param configuration
+    if (!paramApiKey || !paramSecretKey || !paramMerchantId) {
+      console.error('Param configuration missing');
+      return res.status(500).json({ error: 'Param configuration missing' });
     }
 
     const { subscriptionType, userEmail, userName } = req.body;
@@ -451,246 +444,112 @@ app.post('/api/paytr/create-payment', authMiddleware, async (req: CustomRequest,
       return res.status(400).json({ error: 'Missing subscriptionType field' });
     }
 
-    // Get price and other details
-    const amount = getPayTRPrice(subscriptionType);
-    const currency = 'TL';
-    const test_mode = '1'; // Keep in test mode for debugging
+    // Get price
+    const amount = getParamPrice(subscriptionType);
+    
+    // Generate unique transaction ID
+    const transactionId = `TRX${Date.now()}${Math.random().toString(36).substr(2, 9)}`;
 
-    // Generate unique merchant order ID
-    const merchantOid = `SUB${Date.now()}${Math.random().toString(36).substr(2, 9)}`;
-
-    // Create user basket
-    const subscriptionDisplayName = getSubscriptionDisplayName(subscriptionType);
-    const userBasket = JSON.stringify([[subscriptionDisplayName, (amount / 100).toFixed(2), 1]]);
-
-    // Get client IP
-    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
-      req.connection.remoteAddress ||
-      req.socket.remoteAddress ||
-      '127.0.0.1';
-
-    // PayTR payment parameters - ALL parameters that go into the hash
-    const paymentParams: Record<string, string> = {
-      merchant_id: paytrMerchantId,
-      user_ip: clientIp,
-      merchant_oid: merchantOid,
-      email: userEmail || req.user.email || 'customer@example.com',
-      payment_amount: amount.toString(),
-      payment_type: 'card',
-      currency: currency,
-      test_mode: test_mode,
-      non_3d: '0',
-      merchant_ok_url: `${process.env.BASE_URL || 'https://purchasebackend-production.up.railway.app'}/api/paytr/success?merchant_oid=${merchantOid}&user_id=${userId}`,
-      merchant_fail_url: `${process.env.BASE_URL || 'https://purchasebackend-production.up.railway.app'}/api/paytr/fail?merchant_oid=${merchantOid}&user_id=${userId}`,
-      user_name: userName || 'Customer',
-      user_address: 'Turkey',
-      user_phone: '5555555555',
-      user_basket: userBasket,
-      no_installment: '0',
-      max_installment: '12',
-      timeout_limit: '30',
+    // Prepare Param payment request
+    const paymentRequest: ParamPaymentRequest = {
+      apiKey: paramApiKey,
+      transactionId: transactionId,
+      customerId: userId,
+      customerEmail: userEmail,
+      customerName: userName,
+      totalAmount: amount,
+      currency: 'TRY',
+      installmentCount: 1, // No installment
+      successUrl: `${process.env.BASE_URL || 'https://yourdomain.com'}/api/param/success?transactionId=${transactionId}&userId=${userId}`,
+      failUrl: `${process.env.BASE_URL || 'https://yourdomain.com'}/api/param/fail?transactionId=${transactionId}&userId=${userId}`,
+      language: 'tr',
+      products: [
+        {
+          name: getSubscriptionDisplayName(subscriptionType),
+          price: amount,
+          quantity: 1
+        }
+      ]
     };
 
-    // Generate the token with correct hash
-    const paytrToken = generatePayTRToken(paymentParams);
+    // Generate signature
+    const signatureData = `${paramApiKey}${transactionId}${amount}${paramSecretKey}`;
+    const signature = crypto.createHash('sha256').update(signatureData).digest('hex');
+    
+    paymentRequest.signature = signature;
 
-    // Save payment record
-    if (admin.apps.length > 0) {
-      await admin.firestore().collection('paytr_payments').doc(merchantOid).set({
-        user_id: userId,
-        user_email: userEmail || req.user.email,
-        subscription_type: subscriptionType,
-        amount: amount / 100,
-        currency: currency,
-        merchant_oid: merchantOid,
-        status: 'pending',
-        test_mode: test_mode,
-        created_at: new Date(),
-      });
-    }
-
-    // Prepare form data for PayTR API
-    const formParams = new URLSearchParams();
-    Object.entries(paymentParams).forEach(([key, value]) => {
-      formParams.append(key, value);
-    });
-    formParams.append('paytr_token', paytrToken);
-
-    console.log('Sending to PayTR:', Object.fromEntries(formParams));
-
-    // Make request to PayTR API
+    // Make request to Param API
     const response = await axios.post(
-      'https://www.paytr.com/odeme/api/get-token',
-      formParams,
+      `${paramBaseUrl}/payment/create`,
+      paymentRequest,
       {
-        timeout: 30000,
         headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
+          'Content-Type': 'application/json',
           'Accept': 'application/json',
         },
       }
     );
 
-    const responseData = response.data as PayTRResponse;
-    console.log('PayTR API Response:', responseData);
+    const responseData = response.data as any;
 
-    if (responseData.status === 'success' && responseData.token) {
-      const paymentUrl = `https://www.paytr.com/odeme/guvenli/${responseData.token}`;
-
-      // Update payment record
+    if (responseData.result && responseData.result === 'Success') {
+      // Save payment record
       if (admin.apps.length > 0) {
-        await admin.firestore().collection('paytr_payments').doc(merchantOid).update({
-          paytr_token: responseData.token,
-          payment_url: paymentUrl,
-          status: 'token_generated',
-          updated_at: new Date(),
+        await admin.firestore().collection('param_payments').doc(transactionId).set({
+          user_id: userId,
+          user_email: userEmail,
+          subscription_type: subscriptionType,
+          amount: amount,
+          currency: 'TRY',
+          transaction_id: transactionId,
+          status: 'pending',
+          created_at: new Date(),
         });
       }
 
       res.json({
         success: true,
-        token: responseData.token,
-        url: paymentUrl,
-        merchantOid: merchantOid,
-        amount: amount / 100,
-        currency: currency,
-        test_mode: test_mode === '1',
+        paymentUrl: responseData.paymentUrl,
+        transactionId: transactionId,
       });
     } else {
-      console.error('PayTR API Error:', responseData);
-      throw new Error(responseData.reason || 'PayTR token generation failed');
+      throw new Error(responseData.errorMessage || 'Param payment creation failed');
     }
 
   } catch (error: any) {
-    console.error('PayTR payment creation error:', error);
+    console.error('Param payment creation error:', error);
     
-    if (error.response) {
-      console.error('PayTR API Response Status:', error.response.status);
-      console.error('PayTR API Response Data:', error.response.data);
-      console.error('PayTR API Response Headers:', error.response.headers);
-    }
-
-    const errorMessage = error.response?.data?.reason ||
-      error.response?.data?.message ||
+    const errorMessage = error.response?.data?.errorMessage ||
       error.message ||
-      'Unknown PayTR API error';
+      'Unknown Param API error';
 
     res.status(500).json({
-      error: 'Failed to create PayTR payment: ' + errorMessage,
-      debug: {
-        status: error.response?.status,
-        data: error.response?.data
-      }
+      error: 'Failed to create Param payment: ' + errorMessage,
     });
   }
 });
 
+// Helper function to get price for Param
+function getParamPrice(subscriptionType: string): number {
+  const prices: Record<string, number> = {
+    // Basic Plans
+    'basic_monthly': 1.00,    // ₺1.00
+    'basic_3months': 2.00,   // ₺2.00
+    'basic_yearly': 9.00,    // ₺9.00
 
-// CORRECTED PayTR token generation - This matches PayTR's exact requirements
-const generatePayTRToken = (params: Record<string, string>): string => {
-  // PayTR hash string MUST be in this exact order according to their API documentation
-  const hashString = 
-    params.merchant_id + 
-    params.user_ip + 
-    params.merchant_oid + 
-    params.email + 
-    params.payment_amount + 
-    params.payment_type + 
-    params.currency + 
-    params.test_mode + 
-    params.non_3d + 
-    params.merchant_ok_url + 
-    params.merchant_fail_url + 
-    params.user_name + 
-    params.user_address + 
-    params.user_phone + 
-    params.user_basket + 
-    params.no_installment + 
-    params.max_installment + 
-    params.timeout_limit + 
-    paytrMerchantSalt;
-  
-  console.log('=== PayTR Hash Debug ===');
-  console.log('Hash components in order:');
-  console.log('1. merchant_id:', params.merchant_id);
-  console.log('2. user_ip:', params.user_ip);
-  console.log('3. merchant_oid:', params.merchant_oid);
-  console.log('4. email:', params.email);
-  console.log('5. payment_amount:', params.payment_amount);
-  console.log('6. payment_type:', params.payment_type);
-  console.log('7. currency:', params.currency);
-  console.log('8. test_mode:', params.test_mode);
-  console.log('9. non_3d:', params.non_3d);
-  console.log('10. merchant_ok_url:', params.merchant_ok_url);
-  console.log('11. merchant_fail_url:', params.merchant_fail_url);
-  console.log('12. user_name:', params.user_name);
-  console.log('13. user_address:', params.user_address);
-  console.log('14. user_phone:', params.user_phone);
-  console.log('15. user_basket:', params.user_basket);
-  console.log('16. no_installment:', params.no_installment);
-  console.log('17. max_installment:', params.max_installment);
-  console.log('18. timeout_limit:', params.timeout_limit);
-  console.log('19. salt:', paytrMerchantSalt ? 'SET' : 'NOT SET');
-  console.log('Final hash string:', hashString);
-  console.log('Hash string length:', hashString.length);
-  
-  const token = crypto.createHmac('sha256', paytrMerchantKey).update(hashString).digest('base64');
-  console.log('Generated token:', token);
-  return token;
-};
+    // Premium Plans
+    'premium_monthly': 3.00, // ₺3.00
+    'premium_3months': 6.50, // ₺6.50
+    'premium_yearly': 20.00, // ₺20.00
 
-app.post('/api/test-paytr-token', async (req: Request, res: Response) => {
-  const testParams = {
-    merchant_id: paytrMerchantId,
-    user_ip: '127.0.0.1',
-    merchant_oid: 'TEST123',
-    email: 'test@test.com',
-    payment_amount: '100',
-    currency: 'TL',
-    test_mode: '1',
-    merchant_ok_url: 'https://example.com/success',
-    merchant_fail_url: 'https://example.com/fail',
-    user_name: 'Test User',
-    user_address: 'Test Address',
-    user_phone: '5555555555',
-    user_basket: JSON.stringify([['Test Product', '1.00', 1]]),
-    no_installment: '0',
-    max_installment: '12',
+    // VIP Plans
+    'vip_monthly': 7.50,     // ₺7.50
+    'vip_3months': 15.00,    // ₺15.00
+    'vip_yearly': 26.00,     // ₺26.00
   };
-  
-  const token = generatePayTRToken(testParams);
-  
-  res.json({
-    params: testParams,
-    token,
-    configStatus: {
-      hasMerchantId: !!paytrMerchantId,
-      hasMerchantKey: !!paytrMerchantKey,
-      hasMerchantSalt: !!paytrMerchantSalt,
-    }
-  });
-});
 
-// Enhanced debug endpoint
-app.get('/api/debug/paytr-full-config', (req: Request, res: Response) => {
-  // Don't expose your merchant key in response, just check if it exists
-  const hasKey = !!process.env.PAYTR_MERCHANT_KEY;
-  const keyLength = process.env.PAYTR_MERCHANT_KEY?.length || 0;
-  
-  res.json({
-    merchantId: process.env.PAYTR_MERCHANT_ID,
-    merchantIdLength: process.env.PAYTR_MERCHANT_ID?.length,
-    hasMerchantKey: hasKey,
-    merchantKeyLength: keyLength,
-    hasMerchantSalt: !!process.env.PAYTR_MERCHANT_SALT,
-    merchantSaltLength: process.env.PAYTR_MERCHANT_SALT?.length,
-    nodeEnv: process.env.NODE_ENV,
-    baseUrl: process.env.BASE_URL,
-    frontendUrl: process.env.FRONTEND_URL,
-    // Add a test hash generation
-    testHash: crypto.createHmac('sha256', 'test').update('test').digest('base64')
-  });
-});
+  return prices[subscriptionType] || 1.00;
+}
 
 // Helper function to get display names for subscriptions
 function getSubscriptionDisplayName(subscriptionType: string): string {
@@ -709,121 +568,180 @@ function getSubscriptionDisplayName(subscriptionType: string): string {
   return displayNames[subscriptionType] || 'Subscription';
 }
 
-// Add PayTR success callback endpoint
-app.get('/api/paytr/success', async (req: Request, res: Response) => {
+// Param success callback endpoint
+app.get('/api/param/success', async (req: Request, res: Response) => {
   try {
-    const { merchant_oid, user_id } = req.query;
+    const { transactionId, userId } = req.query;
 
-    console.log('PayTR success callback:', { merchant_oid, user_id });
+    console.log('Param success callback:', { transactionId, userId });
 
-    if (merchant_oid && admin.apps.length > 0) {
-      await admin.firestore().collection('paytr_payments').doc(merchant_oid as string).update({
+    if (transactionId && admin.apps.length > 0) {
+      await admin.firestore().collection('param_payments').doc(transactionId as string).update({
         status: 'user_returned_success',
         success_callback_at: new Date(),
       });
+
+      // Verify payment with Param API
+      await verifyParamPayment(transactionId as string, userId as string);
     }
 
-    // Redirect to your app's success page
-    res.redirect(`${process.env.FRONTEND_URL || 'https://yourdomain.com'}/payment-success?gateway=paytr&order=${merchant_oid}`);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://yourdomain.com'}/payment-success?gateway=param&transaction=${transactionId}`);
 
   } catch (error: any) {
-    console.error('PayTR success callback error:', error);
+    console.error('Param success callback error:', error);
     res.redirect(`${process.env.FRONTEND_URL || 'https://yourdomain.com'}/payment-error`);
   }
 });
 
-// Add PayTR fail callback endpoint
-app.get('/api/paytr/fail', async (req: Request, res: Response) => {
+// Param fail callback endpoint
+app.get('/api/param/fail', async (req: Request, res: Response) => {
   try {
-    const { merchant_oid, user_id } = req.query;
+    const { transactionId, userId } = req.query;
 
-    console.log('PayTR fail callback:', { merchant_oid, user_id });
+    console.log('Param fail callback:', { transactionId, userId });
 
-    if (merchant_oid && admin.apps.length > 0) {
-      await admin.firestore().collection('paytr_payments').doc(merchant_oid as string).update({
+    if (transactionId && admin.apps.length > 0) {
+      await admin.firestore().collection('param_payments').doc(transactionId as string).update({
         status: 'user_returned_fail',
         fail_callback_at: new Date(),
       });
     }
 
-    // Redirect to your app's failure page
-    res.redirect(`${process.env.FRONTEND_URL || 'https://yourdomain.com'}/payment-failed?gateway=paytr&order=${merchant_oid}`);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://yourdomain.com'}/payment-failed?gateway=param&transaction=${transactionId}`);
 
   } catch (error: any) {
-    console.error('PayTR fail callback error:', error);
+    console.error('Param fail callback error:', error);
     res.redirect(`${process.env.FRONTEND_URL || 'https://yourdomain.com'}/payment-error`);
   }
 });
 
-// ENHANCED PayTR webhook handler with proper verification
-app.post('/api/paytr/webhook', express.raw({ type: 'application/x-www-form-urlencoded' }), async (req: Request, res: Response) => {
+// Verify Param payment
+async function verifyParamPayment(transactionId: string, userId: string) {
   try {
-    console.log('=== PayTR Webhook Received ===');
-    console.log('Headers:', req.headers);
-    console.log('Raw body:', req.body.toString());
+    // Prepare verification request
+    const verificationRequest: ParamVerificationRequest = {
+      apiKey: paramApiKey,
+      transactionId: transactionId
+    };
 
-    // Parse form data
-    const formData = new URLSearchParams(req.body.toString());
-    const merchant_oid = formData.get('merchant_oid');
-    const status = formData.get('status');
-    const total_amount = formData.get('total_amount');
-    const hash = formData.get('hash');
+    // Generate signature
+    const signatureData = `${paramApiKey}${transactionId}${paramSecretKey}`;
+    const signature = crypto.createHash('sha256').update(signatureData).digest('hex');
+    
+    verificationRequest.signature = signature;
 
-    console.log('Parsed webhook data:', {
-      merchant_oid,
-      status,
-      total_amount,
-      hash: hash?.substring(0, 20) + '...'
-    });
+    // Make request to Param API
+    const response = await axios.post(
+      `${paramBaseUrl}/payment/query`,
+      verificationRequest,
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+      }
+    );
 
-    if (!merchant_oid || !status || !total_amount || !hash) {
-      console.error('Missing required webhook parameters');
-      return res.status(400).send('Missing parameters');
+    const responseData = response.data as any;
+
+    if (responseData.result && responseData.result === 'Success' && 
+        responseData.paymentStatus === 'Approved') {
+      
+      // Get payment details
+      const paymentDoc = await admin.firestore().collection('param_payments').doc(transactionId).get();
+      const paymentData = paymentDoc.data();
+
+      if (paymentData) {
+        const subscriptionType = paymentData.subscription_type;
+        
+        // Calculate expiry date
+        const purchaseDate = new Date();
+        const expiryDate = calculateExpiryDate(subscriptionType);
+
+        // Update user subscription
+        await admin.firestore().collection('users').doc(userId).set({
+          subscription: {
+            type: subscriptionType,
+            purchase_date: purchaseDate,
+            expiry_date: expiryDate,
+            purchase_token: transactionId,
+            product_id: `param_${subscriptionType}`,
+            platform: 'param',
+            status: 'active',
+            last_updated: new Date(),
+          },
+          accountPlan: subscriptionType,
+          expirationDate: expiryDate.toISOString(),
+          last_updated: new Date(),
+        }, { merge: true });
+
+        // Create subscription record
+        await admin.firestore().collection('subscriptions').doc(transactionId).set({
+          user_id: userId,
+          user_email: paymentData.user_email,
+          type: subscriptionType,
+          purchase_date: purchaseDate,
+          expiry_date: expiryDate,
+          purchase_token: transactionId,
+          product_id: `param_${subscriptionType}`,
+          platform: 'param',
+          status: 'active',
+          amount: paymentData.amount,
+          currency: 'TRY',
+          last_updated: new Date(),
+        });
+
+        // Update payment record
+        await admin.firestore().collection('param_payments').doc(transactionId).update({
+          status: 'verified',
+          verified_at: new Date(),
+        });
+
+        console.log('Param payment verified successfully');
+      }
+    } else {
+      console.error('Param payment verification failed:', responseData);
+    }
+  } catch (error: any) {
+    console.error('Param payment verification error:', error);
+  }
+}
+
+// Param webhook handler
+app.post('/api/param/webhook', express.json(), async (req: Request, res: Response) => {
+  try {
+    const webhookData = req.body;
+    const transactionId = webhookData.transactionId;
+    const status = webhookData.paymentStatus;
+    const signature = webhookData.signature;
+
+    // Verify signature
+    const expectedSignatureData = `${paramApiKey}${transactionId}${status}${paramSecretKey}`;
+    const expectedSignature = crypto.createHash('sha256').update(expectedSignatureData).digest('hex');
+
+    if (signature !== expectedSignature) {
+      console.error('Invalid signature in Param webhook');
+      return res.status(400).send('Invalid signature');
     }
 
-    // Verify the hash - PayTR webhook verification
-    const expectedHashData = merchant_oid + paytrMerchantSalt + status + total_amount;
-    const expectedHash = crypto
-      .createHmac('sha256', paytrMerchantKey)
-      .update(expectedHashData)
-      .digest('base64');
-
-    console.log('Hash verification:', {
-      received: hash.substring(0, 20) + '...',
-      expected: expectedHash.substring(0, 20) + '...',
-      matches: hash === expectedHash
-    });
-
-    if (hash !== expectedHash) {
-      console.error('Hash verification failed');
-      return res.status(400).send('Invalid hash');
-    }
-
-    // Get payment details from Firestore
-    let paymentData = null;
-    if (admin.apps.length > 0) {
-      const paymentDoc = await admin.firestore().collection('paytr_payments').doc(merchant_oid).get();
-      paymentData = paymentDoc.data();
-    }
+    // Get payment details
+    const paymentDoc = await admin.firestore().collection('param_payments').doc(transactionId).get();
+    const paymentData = paymentDoc.data();
 
     if (!paymentData) {
-      console.error('Payment record not found:', merchant_oid);
+      console.error('Payment record not found:', transactionId);
       return res.status(404).send('Payment not found');
     }
 
     // Update payment status
-    if (admin.apps.length > 0) {
-      await admin.firestore().collection('paytr_payments').doc(merchant_oid).update({
-        status: status,
-        total_amount: total_amount,
-        webhook_hash: hash,
-        webhook_received_at: new Date(),
-        updated_at: new Date(),
-      });
-    }
+    await admin.firestore().collection('param_payments').doc(transactionId).update({
+      status: status,
+      webhook_received_at: new Date(),
+      updated_at: new Date(),
+    });
 
     // If payment is successful, activate subscription
-    if (status === 'success') {
+    if (status === 'Success') {
       console.log('Payment successful, activating subscription');
 
       const userId = paymentData.user_id;
@@ -834,63 +752,48 @@ app.post('/api/paytr/webhook', express.raw({ type: 'application/x-www-form-urlen
       const expiryDate = calculateExpiryDate(subscriptionType);
 
       // Update user subscription
-      if (admin.apps.length > 0) {
-        await admin.firestore().collection('users').doc(userId).set({
-          subscription: {
-            type: subscriptionType,
-            purchase_date: purchaseDate,
-            expiry_date: expiryDate,
-            purchase_token: merchant_oid,
-            product_id: `paytr_${subscriptionType}`,
-            platform: 'paytr',
-            status: 'active',
-            last_updated: new Date(),
-          },
-          accountPlan: subscriptionType, // For compatibility
-          expirationDate: expiryDate.toISOString(), // For compatibility
-          last_updated: new Date(),
-        }, { merge: true });
-
-        // Create subscription record
-        await admin.firestore().collection('subscriptions').doc(merchant_oid).set({
-          user_id: userId,
-          user_email: paymentData.user_email,
+      await admin.firestore().collection('users').doc(userId).set({
+        subscription: {
           type: subscriptionType,
           purchase_date: purchaseDate,
           expiry_date: expiryDate,
-          purchase_token: merchant_oid,
-          product_id: `paytr_${subscriptionType}`,
-          platform: 'paytr',
+          purchase_token: transactionId,
+          product_id: `param_${subscriptionType}`,
+          platform: 'param',
           status: 'active',
-          amount: parseFloat(total_amount) / 100,
-          currency: 'TL',
           last_updated: new Date(),
-        });
-      }
+        },
+        accountPlan: subscriptionType,
+        expirationDate: expiryDate.toISOString(),
+        last_updated: new Date(),
+        email: paymentData.user_email,
+      }, { merge: true });
+
+      // Create subscription record
+      await admin.firestore().collection('subscriptions').doc(transactionId).set({
+        user_id: userId,
+        user_email: paymentData.user_email,
+        type: subscriptionType,
+        purchase_date: purchaseDate,
+        expiry_date: expiryDate,
+        purchase_token: transactionId,
+        product_id: `param_${subscriptionType}`,
+        platform: 'param',
+        status: 'active',
+        amount: paymentData.amount,
+        currency: 'TRY',
+        last_updated: new Date(),
+      });
 
       console.log('Subscription activated successfully');
     }
 
-    // PayTR expects "OK" response for successful webhook processing
     res.status(200).send('OK');
 
   } catch (error: any) {
-    console.error('PayTR webhook processing error:', error);
+    console.error('Param webhook processing error:', error);
     res.status(500).send('Webhook processing failed');
   }
-});
-
-// Add this debug endpoint to verify your configuration
-app.get('/api/debug/paytr-config', (req: Request, res: Response) => {
-  res.json({
-    hasMerchantId: !!process.env.PAYTR_MERCHANT_ID,
-    hasMerchantKey: !!process.env.PAYTR_MERCHANT_KEY,
-    hasMerchantSalt: !!process.env.PAYTR_MERCHANT_SALT,
-    merchantIdLength: process.env.PAYTR_MERCHANT_ID?.length,
-    merchantKeyLength: process.env.PAYTR_MERCHANT_KEY?.length,
-    merchantSaltLength: process.env.PAYTR_MERCHANT_SALT?.length,
-    nodeEnv: process.env.NODE_ENV,
-  });
 });
 
 // Android purchase verification
@@ -1248,15 +1151,15 @@ app.post('/api/admin/update-subscription', async (req: Request, res: Response) =
   }
 });
 
-// Debug endpoint to check PayTR configuration
-app.get('/api/debug/paytr-config', (req: Request, res: Response) => {
+// Debug endpoint to check Param configuration
+app.get('/api/debug/param-config', (req: Request, res: Response) => {
   res.json({
-    hasMerchantId: !!process.env.PAYTR_MERCHANT_ID,
-    hasMerchantKey: !!process.env.PAYTR_MERCHANT_KEY,
-    hasMerchantSalt: !!process.env.PAYTR_MERCHANT_SALT,
-    merchantIdValue: process.env.PAYTR_MERCHANT_ID ? 'SET' : 'NOT SET',
+    hasApiKey: !!process.env.PARAM_API_KEY,
+    hasSecretKey: !!process.env.PARAM_SECRET_KEY,
+    hasMerchantId: !!process.env.PARAM_MERCHANT_ID,
+    apiKeyValue: process.env.PARAM_API_KEY ? 'SET' : 'NOT SET',
     nodeEnv: process.env.NODE_ENV,
-    allEnvKeys: Object.keys(process.env).filter(key => key.includes('PAYTR')),
+    allEnvKeys: Object.keys(process.env).filter(key => key.includes('PARAM')),
   });
 });
 
@@ -1265,5 +1168,5 @@ app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📊 Health check available at: http://localhost:${PORT}/health`);
   console.log(`🔐 API endpoints ready for purchase verification`);
-  console.log(`🍋 Lemon Squeezy and PayTR endpoints configured`);
+  console.log(`🍋 Lemon Squeezy and Param endpoints configured`);
 });
