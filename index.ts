@@ -1015,7 +1015,11 @@ app.get('/api/debug/env', (req: Request, res: Response) => {
                    !key.toLowerCase().includes('key') && 
                    !key.toLowerCase().includes('private'))
     .reduce((obj, key) => {
-      obj[key] = process.env[key];
+      const value = process.env[key];
+      // Only add to object if value is not undefined
+      if (value !== undefined) {
+        obj[key] = value;
+      }
       return obj;
     }, {} as Record<string, string>);
   
@@ -1026,7 +1030,7 @@ app.get('/api/debug/env', (req: Request, res: Response) => {
     hasParamClientUsername: !!process.env.PARAM_CLIENT_USERNAME,
     hasParamClientPassword: !!process.env.PARAM_CLIENT_PASSWORD,
     hasParamGuidKey: !!process.env.PARAM_GUID_KEY,
-    nodeEnv: process.env.NODE_ENV,
+    nodeEnv: process.env.NODE_ENV || 'not set',
   });
 });
 
