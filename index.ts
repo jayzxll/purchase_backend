@@ -27,24 +27,32 @@ interface ParamApiResponse {
 }
 
 // Define interfaces for Param payment requests
+// Define interfaces for Param payment requests
 interface ParamPaymentRequest {
-  apiKey: string;
-  transactionId: string;
-  customerId: any;
-  customerEmail: any;
-  customerName: any;
-  totalAmount: number;
-  currency: string;
-  installmentCount: number;
-  successUrl: string;
-  failUrl: string;
-  language: string;
-  products: Array<{
-    name: string;
-    price: number;
-    quantity: number;
-  }>;
-  signature?: string;
+  SanalPOS_ID: string;
+  Doviz: string;
+  GUID: string;
+  KK_Sahibi: string;
+  KK_No: string;
+  KK_SK_Ay: string;
+  KK_SK_Yil: string;
+  KK_CVC: string;
+  KK_Sahibi_GSM?: string;
+  Hata_URL: string;
+  Basarili_URL: string;
+  Siparis_ID: string;
+  Siparis_Aciklama: string;
+  Taksit: string;
+  Islem_Tutar: string;
+  Toplam_Tutar: string;
+  Islem_ID: string;
+  IPAdr: string;
+  Ref_URL: string;
+  CLIENT_CODE?: string;
+  CLIENT_USERNAME?: string;
+  CLIENT_PASSWORD?: string;
+  Islem_Hash?: string;
+  [key: string]: any; // For any additional properties
 }
 
 interface ParamVerificationRequest {
@@ -440,27 +448,32 @@ async function handleSubscriptionCancelled(event: any) {
 // ✅ PARAM ENDPOINTS
 
 // Create Param payment
+// ✅ PARAM ENDPOINTS - UPDATED VERSION
+
+// Create Param payment (updated to match proper API structure)
 app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest, res: Response) => {
   console.log('=== Param Payment Creation Started ===');
 
   try {
-    // Get Param credentials from environment (updated with your actual credentials)
-    const terminalNo = process.env.PARAM_TERMINAL_NO;
-    const clientUsername = process.env.PARAM_CLIENT_USERNAME;
-    const clientPassword = process.env.PARAM_CLIENT_PASSWORD;
-    const guidKey = process.env.PARAM_GUID_KEY;
+    // Get Param credentials from environment
+    const developmentMode = process.env.PARAM_DEVELOPMENT_MODE === 'true';
+    const clientCode = developmentMode ? process.env.PARAM_CLIENT_CODE : process.env.PARAM_PROD_CLIENT_CODE;
+    const clientUsername = developmentMode ? process.env.PARAM_CLIENT_USERNAME : process.env.PARAM_PROD_CLIENT_USERNAME;
+    const clientPassword = developmentMode ? process.env.PARAM_CLIENT_PASSWORD : process.env.PARAM_PROD_CLIENT_PASSWORD;
+    const guid = developmentMode ? process.env.PARAM_GUID : process.env.PARAM_PROD_GUID;
+    const baseUrl = developmentMode ? process.env.PARAM_BASE_URL : process.env.PARAM_PROD_BASE_URL;
 
     // Validate Param configuration
-    if (!terminalNo || !clientUsername || !clientPassword || !guidKey) {
+    if (!clientCode || !clientUsername || !clientPassword || !guid || !baseUrl) {
       console.error('Param configuration missing');
       return res.status(500).json({ error: 'Param configuration missing' });
     }
 
-    const { subscriptionType, userEmail, userName } = req.body;
+    const { subscriptionType, userEmail, userName, cardHolderName, cardNumber, cardExpMonth, cardExpYear, cardCVC, cardHolderPhone } = req.body;
     const userId = req.user.uid;
 
-    if (!subscriptionType) {
-      return res.status(400).json({ error: 'Missing subscriptionType field' });
+    if (!subscriptionType || !cardHolderName || !cardNumber || !cardExpMonth || !cardExpYear || !cardCVC) {
+      return res.status(400).json({ error: 'Missing required fields' });
     }
 
     // Get price
@@ -470,53 +483,38 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
     const transactionId = `TRX${Date.now()}${Math.random().toString(36).substr(2, 9)}`;
 
     // Prepare Param payment request according to their API documentation
-    // Note: This structure needs to be adjusted based on Param's actual API requirements
     const paymentRequest = {
-      G: {
-        CLIENT_CODE: terminalNo,
-        CLIENT_USERNAME: clientUsername,
-        CLIENT_PASSWORD: clientPassword,
-        GUID: guidKey
-      },
-      // These fields need to be adjusted based on Param's API documentation
-      Islem_Tipi: 'Satis', // Transaction type: Sale
-      Siparis_ID: transactionId,
-      Siparis_Aciklama: getSubscriptionDisplayName(subscriptionType),
-      Islem_Guvenlik_Tip: '3D', // 3D Secure
-      Islem_Tutar: amount.toString(),
-      Toplam_Tutar: amount.toString(),
-      Islem_Hash: '', // Will be calculated below
-      Islem_Currency: '949', // TRY currency code
-      Taksit: '1', // Installment count
+      SanalPOS_ID: process.env.PARAM_TERMINAL_NO || '000000000', // Terminal number
+      Doviz: 'TRY', // Currency
+      GUID: guid,
+      KK_Sahibi: cardHolderName,
+      KK_No: cardNumber.replace(/\s/g, ''), // Remove spaces from card number
+      KK_SK_Ay: cardExpMonth.toString().padStart(2, '0'),
+      KK_SK_Yil: cardExpYear.toString().slice(-2), // Last 2 digits of year
+      KK_CVC: cardCVC,
+      KK_Sahibi_GSM: cardHolderPhone || '',
       Hata_URL: `${process.env.BASE_URL || 'https://www.erosaidating.com'}/api/param/fail?transactionId=${transactionId}&userId=${userId}`,
       Basarili_URL: `${process.env.BASE_URL || 'https://www.erosaidating.com'}/api/param/success?transactionId=${transactionId}&userId=${userId}`,
-      // Customer information
-      KK_Sahibi: userName,
-      KK_No: '', // Will be provided by customer during payment
-      KK_SK_Ay: '',
-      KK_SK_Yil: '',
-      KK_CVC: '',
-      KK_Sahibi_GSM: '', // Customer phone if available
-      // Additional customer info
-      IPAdr: req.ip || req.connection.remoteAddress,
+      Siparis_ID: transactionId,
+      Siparis_Aciklama: getSubscriptionDisplayName(subscriptionType),
+      Taksit: '1', // Installment count
+      Islem_Tutar: amount.toFixed(2),
+      Toplam_Tutar: amount.toFixed(2),
+      Islem_ID: transactionId,
+      IPAdr: req.ip || req.connection.remoteAddress || '',
       Ref_URL: process.env.BASE_URL || 'https://www.erosaidating.com',
-      Data1: userId, // Custom field for user ID
-      Data2: subscriptionType, // Custom field for subscription type
-      Data3: userEmail // Custom field for user email
+      // Authentication fields (may be required in some implementations)
+      CLIENT_CODE: clientCode,
+      CLIENT_USERNAME: clientUsername,
+      CLIENT_PASSWORD: clientPassword
     };
 
-    // Generate hash/signature (adjust based on Param's requirements)
-    // This is an example - you need to check Param's documentation for the correct hash generation method
-    const hashData = `${terminalNo}${transactionId}${amount}${clientPassword}${guidKey}`;
-    const hash = crypto.createHash('sha1').update(hashData).digest('base64');
-    paymentRequest.Islem_Hash = hash;
-
-    console.log('Making Param API request to:', process.env.PARAM_BASE_URL);
+    console.log('Making Param API request to:', baseUrl);
     console.log('Request body:', JSON.stringify(paymentRequest, null, 2));
 
     // Make request to Param API
     const response = await axios.post(
-      process.env.PARAM_BASE_URL || 'https://test-dmz.param.com.tr:4443/turkpos.ws/service_turkpos_prod.asmx',
+      baseUrl,
       paymentRequest,
       {
         headers: {
@@ -535,7 +533,6 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
     const responseData = response.data as ParamApiResponse;
 
     // Process response based on Param's actual response format
-    // You need to adjust this based on their actual API response structure
     if (responseData && (responseData.Sonuc === '1' || responseData.Sonuc === 1)) {
       // Success case
       
@@ -545,6 +542,7 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
           user_id: userId,
           user_email: userEmail,
           user_name: userName,
+          card_holder_name: cardHolderName,
           subscription_type: subscriptionType,
           amount: amount,
           currency: 'TRY',
@@ -561,7 +559,8 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
         success: true,
         paymentUrl: responseData.Redirect_URL || responseData.Payment_URL || '',
         transactionId: transactionId,
-        paramRefId: responseData.Islem_ID || responseData.Ref_ID || ''
+        paramRefId: responseData.Islem_ID || responseData.Ref_ID || '',
+        message: responseData.Sonuc_Aciklama || 'Payment initiated successfully'
       });
     } else {
       // Error case
@@ -590,7 +589,11 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
         });
       }
       
-      throw new Error(errorMessage);
+      res.status(400).json({
+        success: false,
+        error: errorMessage,
+        transactionId: transactionId
+      });
     }
 
   } catch (error: any) {
@@ -623,8 +626,9 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
     }
 
     res.status(statusCode).json({
+      success: false,
       error: 'Failed to create Param payment: ' + errorMessage,
-      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
