@@ -5,7 +5,7 @@ import * as admin from 'firebase-admin';
 import { config } from 'dotenv';
 import crypto from 'crypto';
 import axios from 'axios';
-import { createParamAuth } from './param-auth';
+import { createParamAuth, ParamAuth } from './param-auth';
 
 // Load environment variables
 config();
@@ -507,8 +507,8 @@ function validateParamPaymentRequest(requestData: any): { isValid: boolean; erro
   const currentYearFull = new Date().getFullYear();
   const expYearFull = 2000 + yearNum; // Convert 2-digit to 4-digit year
 
-  if (expYearFull < currentYearFull || 
-     (expYearFull === currentYearFull && monthNum < currentMonth)) {
+  if (expYearFull < currentYearFull ||
+    (expYearFull === currentYearFull && monthNum < currentMonth)) {
     return { isValid: false, error: 'Kartınızın son kullanım tarihi geçmiş' };
   }
 
@@ -595,34 +595,43 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
     const clientCode = developmentMode ? process.env.PARAM_CLIENT_CODE : process.env.PARAM_PROD_CLIENT_CODE;
     const clientUsername = developmentMode ? process.env.PARAM_CLIENT_USERNAME : process.env.PARAM_PROD_CLIENT_USERNAME;
     const clientPassword = developmentMode ? process.env.PARAM_CLIENT_PASSWORD : process.env.PARAM_PROD_CLIENT_PASSWORD;
+    const terminalNo = developmentMode ? process.env.PARAM_TERMINAL_NO : process.env.PARAM_PROD_TERMINAL_NO;
     const guid = developmentMode ? process.env.PARAM_GUID : process.env.PARAM_PROD_GUID;
     const baseUrl = developmentMode ? process.env.PARAM_BASE_URL : process.env.PARAM_PROD_BASE_URL;
 
     // Validate Param configuration
-    if (!clientCode || !clientUsername || !clientPassword || !guid || !baseUrl) {
-      console.error('Param configuration missing');
+    if (!clientCode || !clientUsername || !clientPassword || !terminalNo || !guid || !baseUrl) {
+      console.error('Param configuration missing:', {
+        hasClientCode: !!clientCode,
+        hasClientUsername: !!clientUsername,
+        hasClientPassword: !!clientPassword,
+        hasTerminalNo: !!terminalNo,
+        hasGuid: !!guid,
+        hasBaseUrl: !!baseUrl
+      });
       return res.status(500).json({ error: 'Ödeme sistemi yapılandırması eksik' });
     }
 
     // Get price
     const amount = getParamPrice(subscriptionType);
-    
+
     // Generate unique transaction ID
     const transactionId = `TRX${Date.now()}${Math.random().toString(36).substr(2, 9)}`;
 
     // Prepare basic payment data (without authentication)
+    // In your create-payment endpoint:
     const paymentData = {
-      SanalPOS_ID: process.env.PARAM_TERMINAL_NO || '000000000',
-      Doviz: 'TRY',
-      GUID: guid,
-      KK_Sahibi: cardHolderName.trim(),
-      KK_No: cardNumber.replace(/\s/g, ''), // Clean card number
+      SanalPOS_ID: terminalNo,           // Must match exactly
+      Doviz: 'TRY',                      // Must match exactly  
+      GUID: guid,                        // Must match exactly
+      KK_Sahibi: cardHolderName.trim(),  // Must match exactly
+      KK_No: cardNumber.replace(/\s/g, ''),
       KK_SK_Ay: cardExpMonth.toString().padStart(2, '0'),
       KK_SK_Yil: cardExpYear.toString().slice(-2),
       KK_CVC: cardCVC.toString(),
-      KK_Sahibi_GSM: cardHolderPhone ? cardHolderPhone.replace(/\D/g, '') : '', // Clean phone number
-      Hata_URL: `${process.env.BASE_URL || 'https://www.erosaidating.com'}/api/param/fail?transactionId=${transactionId}&userId=${userId}`,
-      Basarili_URL: `${process.env.BASE_URL || 'https://www.erosaidating.com'}/api/param/success?transactionId=${transactionId}&userId=${userId}`,
+      KK_Sahibi_GSM: cardHolderPhone ? cardHolderPhone.replace(/\D/g, '') : '',
+      Hata_URL: `${process.env.BASE_URL}/api/param/fail?transactionId=${transactionId}&userId=${userId}`,
+      Basarili_URL: `${process.env.BASE_URL}/api/param/success?transactionId=${transactionId}&userId=${userId}`,
       Siparis_ID: transactionId,
       Siparis_Aciklama: getSubscriptionDisplayName(subscriptionType),
       Taksit: '1',
@@ -637,20 +646,28 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
       transactionId,
       amount,
       subscriptionType,
-      cardHolder: cardHolderName
+      cardHolder: cardHolderName,
+      terminalNo,
+      guid
     });
 
     // Create authentication and generate hash
     try {
-      const paramAuth = createParamAuth(paymentData);
-      const authenticatedRequest = paramAuth.generateAuthenticatedRequest(paymentData);
+      // In your create-payment endpoint:
+      const paramAuth = new ParamAuth(clientCode, clientUsername, clientPassword, terminalNo, guid, baseUrl);
+      const authenticatedRequest = await paramAuth.generateAuthenticatedRequest(paymentData);
 
       console.log('Making Param API request to:', baseUrl);
-      console.log('Authenticated request structure:', {
+      console.log('Authenticated request structure:', JSON.stringify({
         hasG: !!authenticatedRequest.G,
         hasHash: !!authenticatedRequest.Islem_Hash,
-        siparis_id: authenticatedRequest.Siparis_ID
-      });
+        siparis_id: authenticatedRequest.Siparis_ID,
+        G: authenticatedRequest.G ? {
+          CLIENT_CODE: authenticatedRequest.G.CLIENT_CODE ? 'SET' : 'MISSING',
+          CLIENT_USERNAME: authenticatedRequest.G.CLIENT_USERNAME ? 'SET' : 'MISSING',
+          CLIENT_PASSWORD: authenticatedRequest.G.CLIENT_PASSWORD ? 'SET' : 'MISSING'
+        } : 'MISSING'
+      }, null, 2));
 
       // Make request to Param API with proper authentication
       const response = await axios.post(
@@ -667,14 +684,14 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
       );
 
       console.log('Param API response status:', response.status);
-      console.log('Param API response data:', response.data);
+      console.log('Param API response data:', JSON.stringify(response.data, null, 2));
 
       const responseData = response.data as ParamApiResponse;
 
       // Process response based on Param's actual response format
       if (responseData && (responseData.Sonuc === '1' || responseData.Sonuc === 1)) {
         // Success case
-        
+
         // Save payment record
         if (admin.apps.length > 0) {
           await admin.firestore().collection('param_payments').doc(transactionId).set({
@@ -703,13 +720,14 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
         });
       } else {
         // Error case
-        const errorMessage = responseData.Sonuc_Aciklama || 
-                            responseData.Error_Message || 
-                            responseData.Mesaj || 
-                            'Ödeme işlemi başlatılamadı';
-        
+        const errorMessage = responseData.Sonuc_Aciklama ||
+          responseData.Error_Message ||
+          responseData.Mesaj ||
+          responseData.Sonuc ||
+          'Ödeme işlemi başlatılamadı';
+
         console.error('Param payment failed:', errorMessage);
-        
+
         // Save failed attempt
         if (admin.apps.length > 0) {
           await admin.firestore().collection('param_payments').doc(transactionId).set({
@@ -727,7 +745,7 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
             payment_response: responseData
           });
         }
-        
+
         res.status(400).json({
           success: false,
           error: errorMessage,
@@ -745,21 +763,21 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
 
   } catch (error: any) {
     console.error('Param payment creation error:', error);
-    
+
     let errorMessage = 'Bilinmeyen ödeme sistemi hatası';
     let statusCode = 500;
-    
+
     if (error.response) {
       console.error('Param API error response:', error.response.data);
       console.error('Param API error status:', error.response.status);
-      
+
       statusCode = error.response.status;
-      
+
       const errorData = error.response.data as ParamApiResponse;
-      errorMessage = errorData.Error_Message || 
-                    errorData.Sonuc_Aciklama ||
-                    errorData.Mesaj || 
-                    `İstek başarısız (Durum kodu: ${error.response.status})`;
+      errorMessage = errorData.Error_Message ||
+        errorData.Sonuc_Aciklama ||
+        errorData.Mesaj ||
+        `İstek başarısız (Durum kodu: ${error.response.status})`;
     } else if (error.request) {
       console.error('No response received from Param API');
       errorMessage = 'Ödeme sağlayıcısından yanıt alınamadı';
@@ -803,7 +821,7 @@ function validateParamWebhookData(webhookData: any): { isValid: boolean; error?:
 // Enhanced Param webhook handler with validation
 app.post('/api/param/webhook', express.json(), async (req: Request, res: Response) => {
   console.log('=== Param Webhook Received ===');
-  
+
   try {
     const webhookData = req.body;
     console.log('Webhook data:', JSON.stringify(webhookData, null, 2));
@@ -812,8 +830,8 @@ app.post('/api/param/webhook', express.json(), async (req: Request, res: Respons
     const validation = validateParamWebhookData(webhookData);
     if (!validation.isValid) {
       console.error('Webhook validation failed:', validation.error);
-      return res.status(400).json({ 
-        error: validation.error 
+      return res.status(400).json({
+        error: validation.error
       });
     }
 
@@ -848,7 +866,7 @@ app.post('/api/param/webhook', express.json(), async (req: Request, res: Respons
 
     // Get payment details from database
     const paymentDoc = await admin.firestore().collection('param_payments').doc(transactionId).get();
-    
+
     if (!paymentDoc.exists) {
       console.error('Payment record not found:', transactionId);
       return res.status(404).json({ error: 'Ödeme kaydı bulunamadı' });
@@ -936,7 +954,7 @@ app.post('/api/param/webhook', express.json(), async (req: Request, res: Respons
       console.log('Subscription activated successfully for user:', userId);
     } else {
       console.log('Payment status indicates failure or pending:', status);
-      
+
       // Update user subscription if payment failed
       const userId = paymentData?.user_id;
       if (userId) {
@@ -951,15 +969,15 @@ app.post('/api/param/webhook', express.json(), async (req: Request, res: Respons
     }
 
     console.log('Webhook processed successfully');
-    res.status(200).json({ 
-      success: true, 
+    res.status(200).json({
+      success: true,
       message: 'Webhook başarıyla işlendi',
       transactionId: transactionId
     });
 
   } catch (error: any) {
     console.error('Param webhook processing error:', error);
-    
+
     // More detailed error logging
     if (error.response) {
       console.error('Error response data:', error.response.data);
@@ -970,8 +988,8 @@ app.post('/api/param/webhook', express.json(), async (req: Request, res: Respons
     } else {
       console.error('Error message:', error.message);
     }
-    
-    res.status(500).json({ 
+
+    res.status(500).json({
       error: 'Webhook işlemi başarısız',
       message: error.message,
       transactionId: req.body?.Siparis_ID || req.body?.transactionId
@@ -994,7 +1012,7 @@ function verifyParamWebhookSignature(webhookData: any, signature: string): boole
     // Create expected signature based on Param's requirements
     const transactionId = webhookData.Siparis_ID || webhookData.transactionId || '';
     const status = webhookData.Islem_Sonuc || webhookData.Status || '';
-    
+
     // Generate expected signature (adjust based on Param's actual requirements)
     const signatureData = `${clientCode}${transactionId}${status}${clientPassword}`;
     const expectedSignature = crypto.createHash('sha256').update(signatureData).digest('hex').toUpperCase();
@@ -1099,7 +1117,7 @@ async function verifyParamPayment(transactionId: string, userId: string) {
     // Get Param credentials
     const terminalNo = process.env.PARAM_TERMINAL_NO;
     const clientPassword = process.env.PARAM_CLIENT_PASSWORD;
-    
+
     if (!terminalNo || !clientPassword) {
       console.error('Param configuration missing for verification');
       return;
@@ -1134,14 +1152,14 @@ async function verifyParamPayment(transactionId: string, userId: string) {
     // Process verification response based on Param's API
     if (responseData && (responseData.Sonuc === '1' || responseData.Sonuc === 1)) {
       // Payment verified successfully
-      
+
       // Get payment details
       const paymentDoc = await admin.firestore().collection('param_payments').doc(transactionId).get();
       const paymentData = paymentDoc.data();
 
       if (paymentData) {
         const subscriptionType = paymentData.subscription_type;
-        
+
         // Calculate expiry date
         const purchaseDate = new Date();
         const expiryDate = calculateExpiryDate(subscriptionType);
@@ -1199,7 +1217,7 @@ async function verifyParamPayment(transactionId: string, userId: string) {
 // Param webhook handler
 app.post('/api/param/webhook', express.json(), async (req: Request, res: Response) => {
   console.log('=== Param Webhook Received ===');
-  
+
   try {
     const webhookData = req.body;
     console.log('Webhook data:', JSON.stringify(webhookData, null, 2));
@@ -1224,8 +1242,8 @@ app.post('/api/param/webhook', express.json(), async (req: Request, res: Respons
     // Validate required fields
     if (!transactionId || !status) {
       console.error('Missing required fields in webhook:', { transactionId, status });
-      return res.status(400).json({ 
-        error: 'Missing required fields: transactionId and status are required' 
+      return res.status(400).json({
+        error: 'Missing required fields: transactionId and status are required'
       });
     }
 
@@ -1244,15 +1262,15 @@ app.post('/api/param/webhook', express.json(), async (req: Request, res: Respons
     // Continue with existing webhook processing logic...
     // (Rest of the webhook handler remains the same)
 
-    res.status(200).json({ 
-      success: true, 
+    res.status(200).json({
+      success: true,
       message: 'Webhook processed successfully',
       transactionId: transactionId
     });
 
   } catch (error: any) {
     console.error('Param webhook processing error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Webhook processing failed',
       message: error.message,
       transactionId: req.body?.Siparis_ID || req.body?.transactionId
@@ -1264,10 +1282,10 @@ app.post('/api/param/webhook', express.json(), async (req: Request, res: Respons
 app.get('/api/debug/env', (req: Request, res: Response) => {
   // Filter out sensitive data for security
   const envVars = Object.keys(process.env)
-    .filter(key => !key.toLowerCase().includes('password') && 
-                   !key.toLowerCase().includes('secret') && 
-                   !key.toLowerCase().includes('key') && 
-                   !key.toLowerCase().includes('private'))
+    .filter(key => !key.toLowerCase().includes('password') &&
+      !key.toLowerCase().includes('secret') &&
+      !key.toLowerCase().includes('key') &&
+      !key.toLowerCase().includes('private'))
     .reduce((obj, key) => {
       const value = process.env[key];
       // Only add to object if value is not undefined
@@ -1276,7 +1294,7 @@ app.get('/api/debug/env', (req: Request, res: Response) => {
       }
       return obj;
     }, {} as Record<string, string>);
-  
+
   res.json({
     allEnvKeys: Object.keys(process.env),
     filteredEnv: envVars,
