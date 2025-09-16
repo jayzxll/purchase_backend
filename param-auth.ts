@@ -1,54 +1,145 @@
+import axios from 'axios';
 import crypto from 'crypto';
 
-// Param Authentication Class with correct SHA2B64 hash generation
+// Param Authentication Class with SOAP-based SHA2B64 hash generation
 class ParamAuth {
   private clientCode: string;
   private clientUsername: string;
   private clientPassword: string;
   private terminalNo: string;
   private guid: string;
+  private baseUrl: string;
 
-  constructor(clientCode: string, clientUsername: string, clientPassword: string, terminalNo: string, guid: string) {
+  constructor(clientCode: string, clientUsername: string, clientPassword: string, terminalNo: string, guid: string, baseUrl: string) {
     this.clientCode = clientCode;
     this.clientUsername = clientUsername;
     this.clientPassword = clientPassword;
     this.terminalNo = terminalNo;
     this.guid = guid;
+    this.baseUrl = baseUrl;
   }
 
-  // Generate authentication hash using Param's SHA2B64 method
-  // Updated hash generation with correct parameter order
-  generateAuthHash(paymentData: any): string {
-    // Use the EXACT same parameter order as the PHP constructor
+  // Generate authentication hash using Param's SHA2B64 SOAP method
+  async generateAuthHash(paymentData: any): Promise<string> {
+    try {
+      console.log('Generating hash using Param SOAP service...');
+      
+      // Prepare the hash string in the exact order Param expects
+      // Based on PHP documentation: CLIENT_CODE + GUID + SanalPOS_ID + KK_No + etc.
+      const hashString = [
+        this.clientCode,
+        this.guid,
+        paymentData.SanalPOS_ID,
+        paymentData.KK_No,
+        paymentData.KK_SK_Ay,
+        paymentData.KK_SK_Yil,
+        paymentData.KK_CVC,
+        paymentData.Islem_Tutar,
+        paymentData.Toplam_Tutar,
+        paymentData.Siparis_ID,
+        paymentData.Hata_URL,
+        paymentData.Basarili_URL,
+        paymentData.Siparis_Aciklama,
+        paymentData.Taksit,
+        paymentData.Islem_ID,
+        paymentData.IPAdr,
+        paymentData.Ref_URL,
+        paymentData.Doviz,
+        this.clientPassword
+      ].join('');
+
+      console.log('Hash input string for SOAP:', hashString);
+
+      // Call Param's SHA2B64 SOAP method
+      const soapRequest = `<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <soap:Body>
+    <SHA2B64 xmlns="http://tempuri.org/">
+      <Data>${this.escapeXml(hashString)}</Data>
+    </SHA2B64>
+  </soap:Body>
+</soap:Envelope>`;
+
+      console.log('SOAP Request to:', this.baseUrl);
+      
+      const response = await axios.post(this.baseUrl, soapRequest, {
+      headers: {
+        'Content-Type': 'text/xml; charset=utf-8',
+        'SOAPAction': 'http://tempuri.org/SHA2B64',
+        'User-Agent': 'ErosAI/1.0'
+      },
+      timeout: 30000,
+      responseType: 'text'
+    }) as { data: string; status: number };
+
+      console.log('SOAP Response status:', response.status);
+      
+      // Extract the hash from SOAP response
+        const hashMatch = response.data.match(/<SHA2B64Result>(.*?)<\/SHA2B64Result>/);
+    if (hashMatch && hashMatch[1]) {
+      const hash = hashMatch[1];
+      console.log('Generated hash from Param:', hash);
+      return hash;
+    } else {
+      console.error('SOAP Response:', response.data);
+      throw new Error('Hash generation failed - no SHA2B64Result in response');
+    }
+    } catch (error: any) {
+      console.error('SOAP hash generation error:', error.message);
+      if (error.response) {
+        console.error('SOAP Error response:', error.response.data);
+      }
+      throw new Error('SOAP hash generation failed: ' + error.message);
+    }
+  }
+
+  // Helper method to escape XML special characters
+  private escapeXml(unsafe: string): string {
+    return unsafe.replace(/[<>&'"]/g, (c) => {
+      switch (c) {
+        case '<': return '&lt;';
+        case '>': return '&gt;';
+        case '&': return '&amp;';
+        case '\'': return '&apos;';
+        case '"': return '&quot;';
+        default: return c;
+      }
+    });
+  }
+
+  // Fallback method: local hash generation (for testing or backup)
+  generateAuthHashLocal(paymentData: any): string {
+    console.log('Using local hash generation (fallback)');
+    
     const hashString = [
-      paymentData.SanalPOS_ID,    // virtualPosIdentifier
-      paymentData.Doviz,          // currency
-      paymentData.GUID,           // globalUniqueIdentifier
-      paymentData.KK_Sahibi,      // cardHolderName
-      paymentData.KK_No,          // cardNo
-      paymentData.KK_SK_Ay,       // cardExpireMonth
-      paymentData.KK_SK_Yil,      // cardExpireYear
-      paymentData.KK_CVC,         // cvc
-      paymentData.KK_Sahibi_GSM,  // cardHolderMobile
-      paymentData.Hata_URL,       // error
-      paymentData.Basarili_URL,   // success
-      paymentData.Siparis_ID,     // orderId
-      paymentData.Siparis_Aciklama, // orderExplanation
-      paymentData.Taksit,         // installment
-      paymentData.Islem_Tutar,    // transactionExpense
-      paymentData.Toplam_Tutar,   // totalExpense
-      paymentData.Islem_ID,       // transactionIdentifier
-      paymentData.IPAdr,          // IP
-      paymentData.Ref_URL,        // refererURL
-      this.clientPassword         // CLIENT_PASSWORD (from auth)
-    ].join('|'); // Use the same separator as Param expects
+      this.clientCode,
+      this.guid,
+      paymentData.SanalPOS_ID,
+      paymentData.KK_No,
+      paymentData.KK_SK_Ay,
+      paymentData.KK_SK_Yil,
+      paymentData.KK_CVC,
+      paymentData.Islem_Tutar,
+      paymentData.Toplam_Tutar,
+      paymentData.Siparis_ID,
+      paymentData.Hata_URL,
+      paymentData.Basarili_URL,
+      paymentData.Siparis_Aciklama,
+      paymentData.Taksit,
+      paymentData.Islem_ID,
+      paymentData.IPAdr,
+      paymentData.Ref_URL,
+      paymentData.Doviz,
+      this.clientPassword
+    ].join('');
 
-    console.log('Hash input string (in Param order):', hashString);
-
+    console.log('Local hash input:', hashString);
+    
     // SHA256 hash followed by Base64 encoding
     const hash = crypto.createHash('sha256').update(hashString).digest('hex');
     const base64Hash = Buffer.from(hash).toString('base64');
-
+    
+    console.log('Local generated hash:', base64Hash);
     return base64Hash;
   }
 
@@ -62,34 +153,45 @@ class ParamAuth {
   }
 
   // Generate complete request with auth
- generateAuthenticatedRequest(paymentData: any): any {
-  const authHash = this.generateAuthHash(paymentData);
-  
-  return {
-    G: this.getAuthObject(),  // Authentication
-    Islem_Hash: authHash,     // Generated hash
-    // Payment data in exact order:
-    SanalPOS_ID: paymentData.SanalPOS_ID,
-    Doviz: paymentData.Doviz,
-    GUID: paymentData.GUID,
-    KK_Sahibi: paymentData.KK_Sahibi,
-    KK_No: paymentData.KK_No,
-    KK_SK_Ay: paymentData.KK_SK_Ay,
-    KK_SK_Yil: paymentData.KK_SK_Yil,
-    KK_CVC: paymentData.KK_CVC,
-    KK_Sahibi_GSM: paymentData.KK_Sahibi_GSM,
-    Hata_URL: paymentData.Hata_URL,
-    Basarili_URL: paymentData.Basarili_URL,
-    Siparis_ID: paymentData.Siparis_ID,
-    Siparis_Aciklama: paymentData.Siparis_Aciklama,
-    Taksit: paymentData.Taksit,
-    Islem_Tutar: paymentData.Islem_Tutar,
-    Toplam_Tutar: paymentData.Toplam_Tutar,
-    Islem_ID: paymentData.Islem_ID,
-    IPAdr: paymentData.IPAdr,
-    Ref_URL: paymentData.Ref_URL
-  };
-}
+  async generateAuthenticatedRequest(paymentData: any, useLocalHash: boolean = false): Promise<any> {
+    let authHash: string;
+    
+    try {
+      if (useLocalHash) {
+        authHash = this.generateAuthHashLocal(paymentData);
+      } else {
+        authHash = await this.generateAuthHash(paymentData);
+      }
+    } catch (error) {
+      console.warn('SOAP hash failed, falling back to local generation');
+      authHash = this.generateAuthHashLocal(paymentData);
+    }
+    
+    return {
+      G: this.getAuthObject(),
+      Islem_Hash: authHash,
+      // Payment data
+      SanalPOS_ID: paymentData.SanalPOS_ID,
+      Doviz: paymentData.Doviz,
+      GUID: paymentData.GUID,
+      KK_Sahibi: paymentData.KK_Sahibi,
+      KK_No: paymentData.KK_No,
+      KK_SK_Ay: paymentData.KK_SK_Ay,
+      KK_SK_Yil: paymentData.KK_SK_Yil,
+      KK_CVC: paymentData.KK_CVC,
+      KK_Sahibi_GSM: paymentData.KK_Sahibi_GSM || '',
+      Hata_URL: paymentData.Hata_URL,
+      Basarili_URL: paymentData.Basarili_URL,
+      Siparis_ID: paymentData.Siparis_ID,
+      Siparis_Aciklama: paymentData.Siparis_Aciklama,
+      Taksit: paymentData.Taksit,
+      Islem_Tutar: paymentData.Islem_Tutar,
+      Toplam_Tutar: paymentData.Toplam_Tutar,
+      Islem_ID: paymentData.Islem_ID,
+      IPAdr: paymentData.IPAdr,
+      Ref_URL: paymentData.Ref_URL
+    };
+  }
 }
 
 // Helper function to create Param authentication
@@ -116,11 +218,23 @@ export function createParamAuth(paymentData: any): ParamAuth {
     process.env.PARAM_GUID :
     process.env.PARAM_PROD_GUID;
 
-  if (!clientCode || !clientUsername || !clientPassword || !terminalNo || !guid) {
+  const baseUrl = developmentMode ?
+    process.env.PARAM_BASE_URL :
+    process.env.PARAM_PROD_BASE_URL;
+
+  if (!clientCode || !clientUsername || !clientPassword || !terminalNo || !guid || !baseUrl) {
+    console.error('Missing Param credentials:', {
+      clientCode: !!clientCode,
+      clientUsername: !!clientUsername,
+      clientPassword: !!clientPassword,
+      terminalNo: !!terminalNo,
+      guid: !!guid,
+      baseUrl: !!baseUrl
+    });
     throw new Error('Param authentication credentials are missing');
   }
 
-  return new ParamAuth(clientCode, clientUsername, clientPassword, terminalNo, guid);
+  return new ParamAuth(clientCode, clientUsername, clientPassword, terminalNo, guid, baseUrl);
 }
 
 // Enhanced Param payment request structure
