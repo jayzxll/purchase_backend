@@ -17,39 +17,38 @@ class ParamAuth {
   }
 
   // Generate authentication hash using Param's SHA2B64 method
+  // Updated hash generation with correct parameter order
   generateAuthHash(paymentData: any): string {
-    // According to Param documentation, the hash should be generated from specific parameters
-    // in a specific order. This is the typical format they require:
+    // Use the EXACT same parameter order as the PHP constructor
     const hashString = [
-      this.clientCode,
-      this.guid,
-      this.terminalNo,
-      paymentData.KK_No,
-      paymentData.KK_SK_Ay,
-      paymentData.KK_SK_Yil,
-      paymentData.KK_CVC,
-      paymentData.Islem_Tutar,
-      paymentData.Toplam_Tutar,
-      paymentData.Siparis_ID,
-      paymentData.Hata_URL,
-      paymentData.Basarili_URL,
-      paymentData.Siparis_Aciklama,
-      paymentData.Taksit,
-      paymentData.Islem_ID,
-      paymentData.IPAdr,
-      paymentData.Ref_URL,
-      paymentData.Doviz,
-      this.clientPassword
-    ].join('|'); // The separator might be different - check Param docs
+      paymentData.SanalPOS_ID,    // virtualPosIdentifier
+      paymentData.Doviz,          // currency
+      paymentData.GUID,           // globalUniqueIdentifier
+      paymentData.KK_Sahibi,      // cardHolderName
+      paymentData.KK_No,          // cardNo
+      paymentData.KK_SK_Ay,       // cardExpireMonth
+      paymentData.KK_SK_Yil,      // cardExpireYear
+      paymentData.KK_CVC,         // cvc
+      paymentData.KK_Sahibi_GSM,  // cardHolderMobile
+      paymentData.Hata_URL,       // error
+      paymentData.Basarili_URL,   // success
+      paymentData.Siparis_ID,     // orderId
+      paymentData.Siparis_Aciklama, // orderExplanation
+      paymentData.Taksit,         // installment
+      paymentData.Islem_Tutar,    // transactionExpense
+      paymentData.Toplam_Tutar,   // totalExpense
+      paymentData.Islem_ID,       // transactionIdentifier
+      paymentData.IPAdr,          // IP
+      paymentData.Ref_URL,        // refererURL
+      this.clientPassword         // CLIENT_PASSWORD (from auth)
+    ].join('|'); // Use the same separator as Param expects
 
-    console.log('Hash input string:', hashString);
-    
+    console.log('Hash input string (in Param order):', hashString);
+
     // SHA256 hash followed by Base64 encoding
     const hash = crypto.createHash('sha256').update(hashString).digest('hex');
     const base64Hash = Buffer.from(hash).toString('base64');
-    
-    console.log('Generated hash (SHA256 -> Base64):', base64Hash);
-    
+
     return base64Hash;
   }
 
@@ -63,31 +62,50 @@ class ParamAuth {
   }
 
   // Generate complete request with auth
-  generateAuthenticatedRequest(paymentData: any): any {
-    const authHash = this.generateAuthHash(paymentData);
-    
-    return {
-      G: this.getAuthObject(),
-      Islem_Hash: authHash,
-      ...paymentData
-    };
-  }
+ generateAuthenticatedRequest(paymentData: any): any {
+  const authHash = this.generateAuthHash(paymentData);
+  
+  return {
+    G: this.getAuthObject(),  // Authentication
+    Islem_Hash: authHash,     // Generated hash
+    // Payment data in exact order:
+    SanalPOS_ID: paymentData.SanalPOS_ID,
+    Doviz: paymentData.Doviz,
+    GUID: paymentData.GUID,
+    KK_Sahibi: paymentData.KK_Sahibi,
+    KK_No: paymentData.KK_No,
+    KK_SK_Ay: paymentData.KK_SK_Ay,
+    KK_SK_Yil: paymentData.KK_SK_Yil,
+    KK_CVC: paymentData.KK_CVC,
+    KK_Sahibi_GSM: paymentData.KK_Sahibi_GSM,
+    Hata_URL: paymentData.Hata_URL,
+    Basarili_URL: paymentData.Basarili_URL,
+    Siparis_ID: paymentData.Siparis_ID,
+    Siparis_Aciklama: paymentData.Siparis_Aciklama,
+    Taksit: paymentData.Taksit,
+    Islem_Tutar: paymentData.Islem_Tutar,
+    Toplam_Tutar: paymentData.Toplam_Tutar,
+    Islem_ID: paymentData.Islem_ID,
+    IPAdr: paymentData.IPAdr,
+    Ref_URL: paymentData.Ref_URL
+  };
+}
 }
 
 // Helper function to create Param authentication
 export function createParamAuth(paymentData: any): ParamAuth {
   const developmentMode = process.env.PARAM_DEVELOPMENT_MODE === 'true';
-  
-  const clientCode = developmentMode ? 
-    process.env.PARAM_CLIENT_CODE : 
+
+  const clientCode = developmentMode ?
+    process.env.PARAM_CLIENT_CODE :
     process.env.PARAM_PROD_CLIENT_CODE;
-  
-  const clientUsername = developmentMode ? 
-    process.env.PARAM_CLIENT_USERNAME : 
+
+  const clientUsername = developmentMode ?
+    process.env.PARAM_CLIENT_USERNAME :
     process.env.PARAM_PROD_CLIENT_USERNAME;
-  
-  const clientPassword = developmentMode ? 
-    process.env.PARAM_CLIENT_PASSWORD : 
+
+  const clientPassword = developmentMode ?
+    process.env.PARAM_CLIENT_PASSWORD :
     process.env.PARAM_PROD_CLIENT_PASSWORD;
 
   const terminalNo = developmentMode ?
