@@ -561,6 +561,35 @@ function validateParamPaymentRequest(requestData: any): { isValid: boolean; erro
   return { isValid: true };
 }
 
+// Add this endpoint to your index.ts
+app.get('/api/test-param-connectivity', async (req: Request, res: Response) => {
+  try {
+    const testUrl = 'https://posweb.param.com.tr';
+
+    console.log('Testing connectivity to:', testUrl);
+
+    const response = await axios.get(testUrl, {
+      timeout: 5000,
+
+    });
+
+    res.json({
+      success: true,
+      status: response.status,
+      statusText: response.statusText,
+      canConnect: response.status > 0
+    });
+
+  } catch (error: any) {
+    res.json({
+      success: false,
+      error: error.message,
+      code: error.code,
+      canConnect: false
+    });
+  }
+});
+
 // Enhanced Create Param payment endpoint with comprehensive validation
 app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest, res: Response) => {
   console.log('=== Param Payment Creation Started ===');
@@ -602,12 +631,12 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
     // Validate Param configuration
     if (!clientCode || !clientUsername || !clientPassword || !terminalNo || !guid || !baseUrl) {
       console.error('Param configuration missing:', {
-        hasClientCode: !!clientCode,
-        hasClientUsername: !!clientUsername,
-        hasClientPassword: !!clientPassword,
-        hasTerminalNo: !!terminalNo,
-        hasGuid: !!guid,
-        hasBaseUrl: !!baseUrl
+        hasClientCode: developmentMode ? !!process.env.PARAM_CLIENT_CODE : !!process.env.PARAM_PROD_CLIENT_CODE,
+        hasClientUsername: developmentMode ? !!process.env.PARAM_CLIENT_USERNAME : !!process.env.PARAM_PROD_CLIENT_USERNAME,
+        hasClientPassword: developmentMode ? !!process.env.PARAM_CLIENT_PASSWORD : !!process.env.PARAM_PROD_CLIENT_PASSWORD,
+        hasTerminalNo: developmentMode ? !!process.env.PARAM_TERMINAL_NO : !!process.env.PARAM_PROD_TERMINAL_NO,
+        hasGuid: developmentMode ? !!process.env.PARAM_GUID : !!process.env.PARAM_PROD_GUID,
+        hasBaseUrl: developmentMode ? !!process.env.PARAM_BASE_URL : !!process.env.PARAM_PROD_BASE_URL
       });
       return res.status(500).json({ error: 'Ödeme sistemi yapılandırması eksik' });
     }
@@ -618,31 +647,31 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
     // Generate unique transaction ID
     const transactionId = `TRX${Date.now()}${Math.random().toString(36).substr(2, 9)}`;
 
-    // Prepare basic payment data (without authentication)
-    // In your create-payment endpoint:
-    const paymentData = {
-      SanalPOS_ID: terminalNo,           // Must match exactly
-      Doviz: 'TRY',                      // Must match exactly  
-      GUID: guid,                        // Must match exactly
-      KK_Sahibi: cardHolderName.trim(),  // Must match exactly
+    // ✅ FIXED: Prepare payment data in the CORRECT format for Param API
+    // The payment data for hash generation should NOT include the G object
+    const paymentDataForHash = {
+      SanalPOS_ID: terminalNo,
+      Doviz: 'TRY',
+      GUID: guid,
+      KK_Sahibi: cardHolderName.trim(),
       KK_No: cardNumber.replace(/\s/g, ''),
       KK_SK_Ay: cardExpMonth.toString().padStart(2, '0'),
       KK_SK_Yil: cardExpYear.toString().slice(-2),
       KK_CVC: cardCVC.toString(),
       KK_Sahibi_GSM: cardHolderPhone ? cardHolderPhone.replace(/\D/g, '') : '',
-      Hata_URL: `${process.env.BASE_URL}/api/param/fail?transactionId=${transactionId}&userId=${userId}`,
-      Basarili_URL: `${process.env.BASE_URL}/api/param/success?transactionId=${transactionId}&userId=${userId}`,
-      Siparis_ID: transactionId,
-      Siparis_Aciklama: getSubscriptionDisplayName(subscriptionType),
-      Taksit: '1',
+      Hata_URL: req.body.errorUrl || `${process.env.BASE_URL}/api/param/callback?status=error`,
+      Basarili_URL: req.body.successUrl || `${process.env.BASE_URL}/api/param/callback?status=success`,
+      Siparis_ID: req.body.orderID || transactionId,
+      Siparis_Aciklama: req.body.orderExplanation || getSubscriptionDisplayName(subscriptionType),
+      Taksit: req.body.installment || '1', // ← ADD INSTALLMENT
       Islem_Tutar: amount.toFixed(2),
       Toplam_Tutar: amount.toFixed(2),
       Islem_ID: transactionId,
       IPAdr: req.ip || req.connection.remoteAddress || '127.0.0.1',
-      Ref_URL: process.env.BASE_URL || 'https://www.erosaidating.com',
+      Ref_URL: req.body.paymentUrl || process.env.BASE_URL || 'https://www.erosaidating.com',
     };
 
-    console.log('Payment data prepared:', {
+    console.log('Payment data prepared for hash:', {
       transactionId,
       amount,
       subscriptionType,
@@ -651,11 +680,22 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
       guid
     });
 
-    // Create authentication and generate hash
     try {
-      // In your create-payment endpoint:
+      // ✅ FIXED: Generate hash using ONLY the payment data (without G object)
       const paramAuth = new ParamAuth(clientCode, clientUsername, clientPassword, terminalNo, guid, baseUrl);
-      const authenticatedRequest = await paramAuth.generateAuthenticatedRequest(paymentData);
+      const hash = await paramAuth.generateAuthHash(paymentDataForHash);
+
+      // ✅ FIXED: Create the final authenticated request with proper structure
+      const authenticatedRequest = {
+        G: {
+          CLIENT_CODE: clientCode,
+          CLIENT_USERNAME: clientUsername,
+          CLIENT_PASSWORD: clientPassword
+        },
+        Islem_Hash: hash,
+        // Include all the payment data fields
+        ...paymentDataForHash
+      };
 
       console.log('Making Param API request to:', baseUrl);
       console.log('Authenticated request structure:', JSON.stringify({
@@ -669,22 +709,18 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
         } : 'MISSING'
       }, null, 2));
 
-      // Make request to Param API with proper authentication
-      const response = await axios.post(
-        baseUrl,
-        authenticatedRequest,
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'User-Agent': 'ErosAI/1.0'
-          },
-          timeout: 30000
-        }
-      );
+      // ✅ FIXED: Make request to Param API with proper headers
+      const response = await axios.post(baseUrl, authenticatedRequest, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'User-Agent': 'ErosAI/1.0'
+        },
+        timeout: 30000
+      });
 
       console.log('Param API response status:', response.status);
-      console.log('Param API response data:', JSON.stringify(response.data, null, 2));
+      console.log('Param API response data:', response.data);
 
       const responseData = response.data as ParamApiResponse;
 
@@ -706,7 +742,7 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
             param_ref_id: responseData.Islem_ID || responseData.Ref_ID || '',
             status: 'pending',
             created_at: new Date(),
-            payment_request: authenticatedRequest, // Store the full authenticated request
+            payment_request: authenticatedRequest,
             payment_response: responseData
           });
         }
@@ -723,8 +759,7 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
         const errorMessage = responseData.Sonuc_Aciklama ||
           responseData.Error_Message ||
           responseData.Mesaj ||
-          responseData.Sonuc ||
-          'Ödeme işlemi başlatılamadı';
+          `Ödeme işlemi başlatılamadı (Sonuc: ${responseData.Sonuc})`;
 
         console.error('Param payment failed:', errorMessage);
 
@@ -790,6 +825,57 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
       error: 'Ödeme işlemi başarısız: ' + errorMessage,
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
+  }
+});
+
+
+
+// ✅ ADD THIS - Param callback endpoint (for user redirects)
+app.get('/api/param/callback', async (req: Request, res: Response) => {
+  try {
+    const { transactionId, status, error, userId } = req.query;
+
+    console.log('Param callback received:', {
+      transactionId,
+      status,
+      error,
+      userId
+    });
+
+    if (!transactionId) {
+      return res.status(400).json({ error: 'Transaction ID required' });
+    }
+
+    // Update payment record with callback info
+    if (admin.apps.length > 0) {
+      const updateData: any = {
+        callback_received_at: new Date(),
+        callback_status: status,
+        callback_error: error
+      };
+
+      if (status === 'success') {
+        updateData.status = 'user_returned_success';
+      } else if (status === 'error') {
+        updateData.status = 'user_returned_error';
+        updateData.error_message = error;
+      }
+
+      await admin.firestore().collection('param_payments')
+        .doc(transactionId as string)
+        .update(updateData);
+    }
+
+    // Redirect to appropriate Flutter web page
+    if (status === 'success') {
+      res.redirect(`${process.env.FRONTEND_URL || 'https://www.erosaidating.com'}/payment-success?transactionId=${transactionId}&gateway=param`);
+    } else {
+      res.redirect(`${process.env.FRONTEND_URL || 'https://www.erosaidating.com'}/payment-error?transactionId=${transactionId}&error=${encodeURIComponent(error as string)}&gateway=param`);
+    }
+
+  } catch (error: any) {
+    console.error('Param callback error:', error);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://www.erosaidating.com'}/payment-error?message=Callback processing failed`);
   }
 });
 
@@ -1213,70 +1299,6 @@ async function verifyParamPayment(transactionId: string, userId: string) {
   }
 }
 
-// Param webhook handler
-// Param webhook handler
-app.post('/api/param/webhook', express.json(), async (req: Request, res: Response) => {
-  console.log('=== Param Webhook Received ===');
-
-  try {
-    const webhookData = req.body;
-    console.log('Webhook data:', JSON.stringify(webhookData, null, 2));
-
-    // Extract webhook parameters
-    const transactionId = webhookData.Siparis_ID || webhookData.transactionId || webhookData.Transaction_ID;
-    const status = webhookData.Islem_Sonuc || webhookData.paymentStatus || webhookData.Status;
-    const signature = webhookData.Imza || webhookData.signature || webhookData.Hash;
-    const amount = webhookData.Tutar || webhookData.amount;
-    const currency = webhookData.Para_Birimi || webhookData.currency || 'TRY';
-    const paramRefId = webhookData.Islem_ID || webhookData.Ref_ID || webhookData.Reference_ID;
-
-    console.log('Extracted webhook parameters:', {
-      transactionId,
-      status,
-      signature: signature ? 'PROVIDED' : 'MISSING',
-      amount,
-      currency,
-      paramRefId
-    });
-
-    // Validate required fields
-    if (!transactionId || !status) {
-      console.error('Missing required fields in webhook:', { transactionId, status });
-      return res.status(400).json({
-        error: 'Missing required fields: transactionId and status are required'
-      });
-    }
-
-    // Verify signature if provided
-    if (signature) {
-      const isValidSignature = verifyParamWebhookSignature(webhookData, signature);
-      if (!isValidSignature) {
-        console.error('Invalid signature in Param webhook');
-        return res.status(400).json({ error: 'Invalid signature' });
-      }
-      console.log('Signature verification successful');
-    } else {
-      console.warn('No signature provided in webhook, proceeding without verification');
-    }
-
-    // Continue with existing webhook processing logic...
-    // (Rest of the webhook handler remains the same)
-
-    res.status(200).json({
-      success: true,
-      message: 'Webhook processed successfully',
-      transactionId: transactionId
-    });
-
-  } catch (error: any) {
-    console.error('Param webhook processing error:', error);
-    res.status(500).json({
-      error: 'Webhook processing failed',
-      message: error.message,
-      transactionId: req.body?.Siparis_ID || req.body?.transactionId
-    });
-  }
-});
 
 // Debug endpoint to check all environment variables
 app.get('/api/debug/env', (req: Request, res: Response) => {
