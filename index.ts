@@ -831,31 +831,31 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
 // Add this to your index.ts
 app.get('/api/test-param-soap', async (req: Request, res: Response) => {
   try {
-    const paramAuth = createParamAuth();
-    
-    // Test with minimal data
-    const testData: ParamPaymentData = {
-      SanalPOS_ID: process.env.PARAM_TERMINAL_NO!,
-      Doviz: 'TRY',
-      GUID: process.env.PARAM_GUID!,
-      KK_Sahibi: 'TEST USER',
-      KK_No: '4355084355084358',
-      KK_SK_Ay: '12',
-      KK_SK_Yil: '26',
-      KK_CVC: '000',
-      Hata_URL: 'https://www.erosaidating.com/error',
-      Basarili_URL: 'https://www.erosaidating.com/success',
-      Siparis_ID: 'TEST' + Date.now(),
-      Siparis_Aciklama: 'Test Payment',
-      Taksit: '1',
-      Islem_Tutar: '1.00',
-      Toplam_Tutar: '1.00',
-      Islem_ID: 'TEST' + Date.now(),
-      IPAdr: '127.0.0.1',
-      Ref_URL: 'https://www.erosaidating.com'
-    };
+   const paramAuth = createParamAuth();
 
-    const hash = await paramAuth.generateAuthHash(testData);
+const paymentData: ParamPaymentData = {
+  SanalPOS_ID: 'your_sanalpos_id',
+  Doviz: 'TRY',
+  GUID: 'your_guid',
+  KK_Sahibi: 'Card Holder Name',
+  KK_No: '1234567812345678',
+  KK_SK_Ay: '12',
+  KK_SK_Yil: '25',
+  KK_CVC: '123',
+  Hata_URL: 'https://www.erosaidating.com/payment-error',
+  Basarili_URL: 'https://www.erosaidating.com/payment-success',
+  Siparis_ID: 'order_id',
+  Siparis_Aciklama: 'Order Description',
+  Taksit: '1',
+  Islem_Tutar: '100.00',
+  Toplam_Tutar: '100.00',
+  Islem_ID: 'transaction_id',
+  IPAdr: 'user_ip_address',
+  Ref_URL: 'https://www.erosaidating.com'
+};
+
+
+    const hash = await paramAuth.generateAuthHash(paymentData);
     res.json({ success: true, hash });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
