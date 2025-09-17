@@ -682,7 +682,7 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
 
     try {
       // ✅ FIXED: Generate hash using ONLY the payment data (without G object)
-      const paramAuth = new ParamAuth(clientCode, clientUsername, clientPassword, terminalNo, guid, baseUrl);
+      const paramAuth = new ParamAuth({ clientCode, clientUsername, clientPassword, terminalNo, guid, baseUrl });
       const hash = await paramAuth.generateAuthHash(paymentDataForHash);
 
       // ✅ FIXED: Create the final authenticated request with proper structure
