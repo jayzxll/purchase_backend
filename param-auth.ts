@@ -94,7 +94,7 @@ class ParamAuth {
       const response = await axios.post(soapEndpoint, soapRequest, {
         headers: {
           'Content-Type': 'text/xml; charset=utf-8',
-          'SOAPAction': 'http://tempuri.org/SHA2B64', // ← MUST MATCH EXACTLY
+          'SOAPAction': 'http://tempuri.org/IService1/SHA2B64', // ← MUST MATCH EXACTLY
           'User-Agent': 'ErosAI/1.0',
           'Accept': 'text/xml'
         },
