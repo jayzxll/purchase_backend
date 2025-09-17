@@ -5,7 +5,7 @@ import * as admin from 'firebase-admin';
 import { config } from 'dotenv';
 import crypto from 'crypto';
 import axios from 'axios';
-import { createParamAuth, ParamAuth } from './param-auth';
+import { createParamAuth, ParamAuth, ParamPaymentData } from './param-auth';
 
 // Load environment variables
 config();
@@ -828,7 +828,39 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
   }
 });
 
+// Add this to your index.ts
+app.get('/api/test-param-soap', async (req: Request, res: Response) => {
+  try {
+    const paramAuth = createParamAuth();
+    
+    // Test with minimal data
+    const testData: ParamPaymentData = {
+      SanalPOS_ID: process.env.PARAM_TERMINAL_NO!,
+      Doviz: 'TRY',
+      GUID: process.env.PARAM_GUID!,
+      KK_Sahibi: 'TEST USER',
+      KK_No: '4355084355084358',
+      KK_SK_Ay: '12',
+      KK_SK_Yil: '26',
+      KK_CVC: '000',
+      Hata_URL: 'https://www.erosaidating.com/error',
+      Basarili_URL: 'https://www.erosaidating.com/success',
+      Siparis_ID: 'TEST' + Date.now(),
+      Siparis_Aciklama: 'Test Payment',
+      Taksit: '1',
+      Islem_Tutar: '1.00',
+      Toplam_Tutar: '1.00',
+      Islem_ID: 'TEST' + Date.now(),
+      IPAdr: '127.0.0.1',
+      Ref_URL: 'https://www.erosaidating.com'
+    };
 
+    const hash = await paramAuth.generateAuthHash(testData);
+    res.json({ success: true, hash });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // ✅ ADD THIS - Param callback endpoint (for user redirects)
 app.get('/api/param/callback', async (req: Request, res: Response) => {

@@ -55,7 +55,7 @@ class ParamAuth {
   async generateAuthHash(paymentData: ParamPaymentData): Promise<string> {
     try {
       console.log('Generating hash using Param SOAP service...');
-      
+
       // ✅ CORRECT HASH STRING ORDER FOR PARAM
       const hashString = [
         this.clientCode,
@@ -76,6 +76,7 @@ class ParamAuth {
       console.log('Hash input string for SOAP:', hashString);
 
       // ✅ CORRECT SOAP REQUEST FORMAT FOR PARAM
+      // In generateAuthHash method, update the SOAP request:
       const soapRequest = `<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" 
                xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
@@ -87,12 +88,13 @@ class ParamAuth {
   </soap:Body>
 </soap:Envelope>`;
 
-      console.log('SOAP Request to:', this.baseUrl);
-      
-      const response = await axios.post(this.baseUrl, soapRequest, {
+      // ✅ ADD WSDL TO URL FOR TESTING
+      const soapEndpoint = `${this.baseUrl}?WSDL`;
+
+      const response = await axios.post(soapEndpoint, soapRequest, {
         headers: {
           'Content-Type': 'text/xml; charset=utf-8',
-          'SOAPAction': 'http://tempuri.org/SHA2B64',
+          'SOAPAction': 'http://tempuri.org/SHA2B64', // ← MUST MATCH EXACTLY
           'User-Agent': 'ErosAI/1.0',
           'Accept': 'text/xml'
         },
@@ -101,11 +103,11 @@ class ParamAuth {
       });
 
       console.log('SOAP Response status:', response.status);
-      
+
       // ✅ FIXED: Proper type handling for response data
       const responseData = response.data as string;
       console.log('SOAP Response data:', responseData);
-      
+
       // ✅ FIXED: Proper XML parsing
       const hashMatch = responseData.match(/<SHA2B64Result>(.*?)<\/SHA2B64Result>/);
       if (hashMatch && hashMatch[1]) {
@@ -130,21 +132,22 @@ class ParamAuth {
   async generateAuthHashDirect(paymentData: ParamPaymentData): Promise<string> {
     try {
       console.log('Trying direct HTTP endpoint for hash generation...');
-      
+
+      // In generateAuthHash method:
       const hashString = [
-        this.clientCode,
-        this.guid,
-        this.terminalNo,
-        paymentData.KK_No,
-        paymentData.KK_SK_Ay,
-        paymentData.KK_SK_Yil,
-        paymentData.KK_CVC,
-        paymentData.Islem_Tutar,
-        paymentData.Toplam_Tutar,
-        paymentData.Siparis_ID,
-        paymentData.Hata_URL,
-        paymentData.Basarili_URL,
-        this.clientPassword
+        this.clientCode,      // CLIENT_CODE
+        this.guid,           // GUID
+        paymentData.SanalPOS_ID, // TerminalNo/SanalPOS_ID
+        paymentData.KK_No,   // Card Number
+        paymentData.KK_SK_Ay, // Expiry Month
+        paymentData.KK_SK_Yil, // Expiry Year
+        paymentData.KK_CVC,  // CVC
+        paymentData.Islem_Tutar, // Transaction Amount
+        paymentData.Toplam_Tutar, // Total Amount
+        paymentData.Siparis_ID, // Order ID
+        paymentData.Hata_URL, // Error URL
+        paymentData.Basarili_URL, // Success URL
+        this.clientPassword  // CLIENT_PASSWORD (LAST!)
       ].join('');
 
       // Try direct HTTP POST
@@ -162,13 +165,13 @@ class ParamAuth {
 
       const responseData = response.data as string;
       console.log('Direct hash generation response:', responseData);
-      
+
       if (responseData) {
         return responseData.trim();
       }
-      
+
       throw new Error('Empty response from direct endpoint');
-      
+
     } catch (error: any) {
       console.error('Direct hash generation failed:', error.message);
       throw error;
@@ -192,7 +195,7 @@ class ParamAuth {
   // Fallback method: local hash generation (for testing or backup)
   generateAuthHashLocal(paymentData: ParamPaymentData): string {
     console.log('Using local hash generation (fallback)');
-    
+
     const hashString = [
       this.clientCode,
       this.guid,
@@ -210,11 +213,11 @@ class ParamAuth {
     ].join('');
 
     console.log('Local hash input:', hashString);
-    
+
     // SHA256 hash followed by Base64 encoding
     const hash = crypto.createHash('sha256').update(hashString, 'utf8').digest('hex');
     const base64Hash = Buffer.from(hash, 'utf8').toString('base64');
-    
+
     console.log('Local generated hash:', base64Hash);
     return base64Hash;
   }
@@ -231,7 +234,7 @@ class ParamAuth {
   // Generate complete request with auth
   async generateAuthenticatedRequest(paymentData: ParamPaymentData): Promise<any> {
     let authHash: string;
-    
+
     try {
       // First try SOAP
       authHash = await this.generateAuthHash(paymentData);
@@ -246,7 +249,7 @@ class ParamAuth {
         authHash = this.generateAuthHashLocal(paymentData);
       }
     }
-    
+
     return {
       G: this.getAuthObject(),
       Islem_Hash: authHash,
