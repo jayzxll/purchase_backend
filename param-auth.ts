@@ -59,8 +59,8 @@ class ParamAuth {
       // ✅ DOKÜMANDA BELİRTİLEN SIRALAMA (Sayfa 7):
       // CLIENT_CODE + GUID + TerminalID + KK_No + KK_SK_Ay + KK_SK_Yil + KK_CVC + 
       // Islem_Tutar + Toplam_Tutar + Siparis_ID + Hata_URL + Basarili_URL + CLIENT_PASSWORD
-      
-      const hashData = 
+
+      const hashData =
         this.clientCode +
         this.guid +
         this.terminalNo +
@@ -93,40 +93,53 @@ class ParamAuth {
 
   // ✅ DOĞRU: SOAP isteği için format (Doküman Sayfa 9)
   async makeSoapRequest(action: string, requestData: any): Promise<any> {
-    try {
-      const soapRequest = this.buildSoapEnvelope(action, requestData);
-      
-      console.log('📤 SOAP Request to:', this.baseUrl);
-      console.log('SOAP Action:', action);
+  try {
+    const soapRequest = this.buildSoapEnvelope(action, requestData);
+    
+    console.log('📤 SOAP Request to:', this.baseUrl);
+    console.log('SOAP Action:', action);
+    console.log('SOAP Request Body:', soapRequest);
 
-      const response = await axios.post(this.baseUrl, soapRequest, {
-        headers: {
-          'Content-Type': 'text/xml; charset=utf-8',
-          'SOAPAction': `http://tempuri.org/${action}`,
-          'User-Agent': 'ErosAI/1.0'
-        },
-        timeout: 30000,
-        responseType: 'text'
-      });
+    const response = await axios.post(this.baseUrl, soapRequest, {
+      headers: {
+        'Content-Type': 'text/xml; charset=utf-8',
+        'SOAPAction': `http://tempuri.org/ITurkPos/${action}`, // FIXED
+        'User-Agent': 'ErosAI/1.0'
+      },
+      timeout: 30000,
+      responseType: 'text'
+    });
 
-      return this.parseSoapResponse(response.data as string, action);
-    } catch (error: any) {
-      console.error('SOAP request error:', error.message);
-      if (error.response) {
-        console.error('SOAP response status:', error.response.status);
-        console.error('SOAP response data:', error.response.data);
+    console.log('✅ SOAP Response:', response.data);
+    return this.parseSoapResponse(response.data as string, action);
+  } catch (error: any) {
+    console.error('SOAP request error:', error.message);
+    if (error.response) {
+      console.error('SOAP response status:', error.response.status);
+      console.error('SOAP response data:', error.response.data);
+    }
+    throw error;
+  }
+}
+
+  // ✅ DOĞRU: SOAP envelope oluşturma
+ private buildSoapEnvelope(action: string, requestData: any): string {
+  let requestBody = '';
+  
+  for (const [key, value] of Object.entries(requestData)) {
+    if (typeof value === 'object' && value !== null) {
+      // Handle nested objects like G: { CLIENT_CODE, CLIENT_USERNAME, etc. }
+      requestBody += `<${key}>`;
+      for (const [subKey, subValue] of Object.entries(value)) {
+        requestBody += `<${subKey}>${this.escapeXml(subValue)}</${subKey}>`;
       }
-      throw error;
+      requestBody += `</${key}>`;
+    } else {
+      requestBody += `<${key}>${this.escapeXml(value)}</${key}>`;
     }
   }
 
-  // ✅ DOĞRU: SOAP envelope oluşturma
-  private buildSoapEnvelope(action: string, requestData: any): string {
-    const requestBody = Object.keys(requestData)
-      .map(key => `<${key}>${this.escapeXml(requestData[key])}</${key}>`)
-      .join('');
-
-    return `<?xml version="1.0" encoding="utf-8"?>
+  return `<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" 
                xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
                xmlns:xsd="http://www.w3.org/2001/XMLSchema">
@@ -136,22 +149,22 @@ class ParamAuth {
     </${action}>
   </soap:Body>
 </soap:Envelope>`;
-  }
+}
 
   // ✅ DOĞRU: SOAP response parsing
   private parseSoapResponse(responseData: string, action: string): any {
     try {
-       const resultMatch = responseData.match(/<([a-zA-Z:]+)?Result>(.*?)<\/([a-zA-Z:]+)?Result>/);
+      const resultMatch = responseData.match(/<([a-zA-Z:]+)?Result>(.*?)<\/([a-zA-Z:]+)?Result>/);
       if (resultMatch && resultMatch[2]) {
-      return resultMatch[2].trim();
-    }
-      
+        return resultMatch[2].trim();
+      }
+
       // Error handling
       const errorMatch = responseData.match(/<faultstring>(.*?)<\/faultstring>/);
       if (errorMatch) {
         throw new Error(`SOAP Error: ${errorMatch[1]}`);
       }
-      
+
       throw new Error('Invalid SOAP response format');
     } catch (error) {
       console.error('SOAP response parsing error:', error);
@@ -162,7 +175,7 @@ class ParamAuth {
   // ✅ DOĞRU: Ödeme işlemi için SOAP isteği (Doküman Sayfa 10)
   async processPayment(paymentData: ParamPaymentData): Promise<any> {
     const authHash = await this.generateAuthHash(paymentData);
-    
+
     const soapRequestData = {
       G: {
         CLIENT_CODE: this.clientCode,
@@ -228,29 +241,29 @@ class ParamAuth {
   }
 
   // ✅ DOĞRU: XML escape helper
-// ✅ FIXED CODE
-private escapeXml(unsafe: any): string {
-  try {
-    // Handle null/undefined
-    if (unsafe === null || unsafe === undefined) {
-      return '';
+  // ✅ FIXED CODE
+  private escapeXml(unsafe: any): string {
+    try {
+      // Handle null/undefined
+      if (unsafe === null || unsafe === undefined) {
+        return '';
+      }
+
+      // Convert to string
+      const stringValue = String(unsafe);
+
+      // Escape XML special characters
+      return stringValue
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/'/g, '&apos;')
+        .replace(/"/g, '&quot;');
+    } catch (error) {
+      console.error('XML escape error:', error);
+      return ''; // Return empty string on error
     }
-    
-    // Convert to string
-    const stringValue = String(unsafe);
-    
-    // Escape XML special characters
-    return stringValue
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/'/g, '&apos;')
-      .replace(/"/g, '&quot;');
-  } catch (error) {
-    console.error('XML escape error:', error);
-    return ''; // Return empty string on error
   }
-}
 
   // ✅ DOĞRU: Get authentication object
   getAuthObject() {
@@ -264,7 +277,7 @@ private escapeXml(unsafe: any): string {
   // ✅ DOĞRU: Generate complete authenticated request
   async generateAuthenticatedRequest(paymentData: ParamPaymentData): Promise<any> {
     const authHash = await this.generateAuthHash(paymentData);
-    
+
     return {
       G: this.getAuthObject(),
       Islem_Hash: authHash,
@@ -278,26 +291,26 @@ export function createParamAuth(): ParamAuth {
   const developmentMode = process.env.PARAM_DEVELOPMENT_MODE === 'true';
 
   const config = {
-    clientCode: developmentMode ? 
-      process.env.PARAM_CLIENT_CODE : 
+    clientCode: developmentMode ?
+      process.env.PARAM_CLIENT_CODE :
       process.env.PARAM_PROD_CLIENT_CODE,
-    
-    clientUsername: developmentMode ? 
-      process.env.PARAM_CLIENT_USERNAME : 
+
+    clientUsername: developmentMode ?
+      process.env.PARAM_CLIENT_USERNAME :
       process.env.PARAM_PROD_CLIENT_USERNAME,
-    
-    clientPassword: developmentMode ? 
-      process.env.PARAM_CLIENT_PASSWORD : 
+
+    clientPassword: developmentMode ?
+      process.env.PARAM_CLIENT_PASSWORD :
       process.env.PARAM_PROD_CLIENT_PASSWORD,
-    
-    terminalNo: developmentMode ? 
-      process.env.PARAM_TERMINAL_NO : 
+
+    terminalNo: developmentMode ?
+      process.env.PARAM_TERMINAL_NO :
       process.env.PARAM_PROD_TERMINAL_NO,
-    
+
     guid: developmentMode ? process.env.PARAM_GUID! : process.env.PARAM_PROD_GUID!,
-    
-    baseUrl: developmentMode ? 
-      process.env.PARAM_BASE_URL : 
+
+    baseUrl: developmentMode ?
+      process.env.PARAM_BASE_URL :
       process.env.PARAM_PROD_BASE_URL
   };
 
