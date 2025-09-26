@@ -92,34 +92,51 @@ class ParamAuth {
   }
 
   // ✅ DOĞRU: SOAP isteği için format (Doküman Sayfa 9)
-  async makeSoapRequest(action: string, requestData: any): Promise<any> {
-  try {
-    const soapRequest = this.buildSoapEnvelope(action, requestData);
-    
-    console.log('📤 SOAP Request to:', this.baseUrl);
-    console.log('SOAP Action:', action);
-    console.log('SOAP Request Body:', soapRequest);
+ async makeSoapRequest(action: string, requestData: any): Promise<any> {
+  const soapActionFormats = [
+    `http://tempuri.org/${action}`,
+    `http://tempuri.org/ITurkPos/${action}`,
+    action,
+    `ITurkPos/${action}`,
+    '' // Some services accept empty SOAPAction
+  ];
 
-    const response = await axios.post(this.baseUrl, soapRequest, {
-      headers: {
+  for (const soapAction of soapActionFormats) {
+    try {
+      console.log(`🔧 Trying SOAPAction: ${soapAction}`);
+      
+      const soapRequest = this.buildSoapEnvelope(action, requestData);
+      
+      const headers: any = {
         'Content-Type': 'text/xml; charset=utf-8',
-        'SOAPAction': `http://tempuri.org/ITurkPos/${action}`, // FIXED
         'User-Agent': 'ErosAI/1.0'
-      },
-      timeout: 30000,
-      responseType: 'text'
-    });
+      };
+      
+      if (soapAction) {
+        headers['SOAPAction'] = soapAction;
+      }
 
-    console.log('✅ SOAP Response:', response.data);
-    return this.parseSoapResponse(response.data as string, action);
-  } catch (error: any) {
-    console.error('SOAP request error:', error.message);
-    if (error.response) {
-      console.error('SOAP response status:', error.response.status);
-      console.error('SOAP response data:', error.response.data);
+      const response = await axios.post(this.baseUrl.replace('?WSDL', ''), soapRequest, {
+        headers: headers,
+        timeout: 30000,
+        responseType: 'text'
+      });
+
+      console.log(`✅ Success with SOAPAction: ${soapAction}`);
+      return this.parseSoapResponse(response.data as string, action);
+      
+    } catch (error: any) {
+      if (error.response && error.response.data.includes('did not recognize')) {
+        console.log(`❌ SOAPAction rejected: ${soapAction}`);
+        continue; // Try next format
+      } else {
+        // Other error (network, auth, etc.)
+        throw error;
+      }
     }
-    throw error;
   }
+  
+  throw new Error('All SOAPAction formats failed');
 }
 
   // ✅ DOĞRU: SOAP envelope oluşturma
