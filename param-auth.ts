@@ -92,10 +92,19 @@ class ParamAuth {
   }
 
   // ✅ DOĞRU: SOAP isteği için format (Doküman Sayfa 9)
- async makeSoapRequest(action: string, requestData: any): Promise<any> {
+// Update the makeSoapRequest method to try Param-specific formats
+async makeSoapRequest(action: string, requestData: any): Promise<any> {
   const soapActionFormats = [
-    `http://tempuri.org/${action}`,
+    // Param-specific formats
+    `http://turkpos.com.tr/${action}`,
+    `https://turkpos.com.tr/${action}`,
+    `urn:TP_Islem_${action}`,
+    `urn:${action}`,
+    `TP_Islem_${action}`,
+    
+    // Standard formats
     `http://tempuri.org/ITurkPos/${action}`,
+    `http://tempuri.org/${action}`,
     action,
     `ITurkPos/${action}`,
     '' // Some services accept empty SOAPAction
@@ -126,13 +135,15 @@ class ParamAuth {
       return this.parseSoapResponse(response.data as string, action);
       
     } catch (error: any) {
-      if (error.response && error.response.data.includes('did not recognize')) {
-        console.log(`❌ SOAPAction rejected: ${soapAction}`);
-        continue; // Try next format
-      } else {
-        // Other error (network, auth, etc.)
-        throw error;
+      if (error.response && error.response.data) {
+        const errorText = error.response.data.toString();
+        if (errorText.includes('did not recognize') || errorText.includes('Unable to handle request')) {
+          console.log(`❌ SOAPAction rejected: ${soapAction}`);
+          continue; // Try next format
+        }
       }
+      // Other error (network, auth, etc.)
+      throw error;
     }
   }
   
@@ -140,23 +151,23 @@ class ParamAuth {
 }
 
   // ✅ DOĞRU: SOAP envelope oluşturma
- private buildSoapEnvelope(action: string, requestData: any): string {
-  let requestBody = '';
-  
-  for (const [key, value] of Object.entries(requestData)) {
-    if (typeof value === 'object' && value !== null) {
-      // Handle nested objects like G: { CLIENT_CODE, CLIENT_USERNAME, etc. }
-      requestBody += `<${key}>`;
-      for (const [subKey, subValue] of Object.entries(value)) {
-        requestBody += `<${subKey}>${this.escapeXml(subValue)}</${subKey}>`;
-      }
-      requestBody += `</${key}>`;
-    } else {
-      requestBody += `<${key}>${this.escapeXml(value)}</${key}>`;
-    }
-  }
+  private buildSoapEnvelope(action: string, requestData: any): string {
+    let requestBody = '';
 
-  return `<?xml version="1.0" encoding="utf-8"?>
+    for (const [key, value] of Object.entries(requestData)) {
+      if (typeof value === 'object' && value !== null) {
+        // Handle nested objects like G: { CLIENT_CODE, CLIENT_USERNAME, etc. }
+        requestBody += `<${key}>`;
+        for (const [subKey, subValue] of Object.entries(value)) {
+          requestBody += `<${subKey}>${this.escapeXml(subValue)}</${subKey}>`;
+        }
+        requestBody += `</${key}>`;
+      } else {
+        requestBody += `<${key}>${this.escapeXml(value)}</${key}>`;
+      }
+    }
+
+    return `<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" 
                xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
                xmlns:xsd="http://www.w3.org/2001/XMLSchema">
@@ -166,7 +177,7 @@ class ParamAuth {
     </${action}>
   </soap:Body>
 </soap:Envelope>`;
-}
+  }
 
   // ✅ DOĞRU: SOAP response parsing
   private parseSoapResponse(responseData: string, action: string): any {
@@ -236,26 +247,112 @@ class ParamAuth {
     return await this.makeSoapRequest('BIN_SanalPos', binData);
   }
 
-  // ✅ DOĞRU: Test bağlantısı
-  async testConnection(): Promise<boolean> {
+  async testHashGeneration(): Promise<string> {
     try {
       const testData = {
-        G: {
-          CLIENT_CODE: this.clientCode,
-          CLIENT_USERNAME: this.clientUsername,
-          CLIENT_PASSWORD: this.clientPassword
-        },
-        GUID: this.guid,
-        Terminal_ID: this.terminalNo
+        Data: 'test'
       };
 
-      const result = await this.makeSoapRequest('TP_Islem_Odeme_Test', testData);
-      return result.includes('BAŞARILI') || result.includes('1');
+      const result = await this.makeSoapRequest('SHA2B64', testData);
+      return result;
     } catch (error) {
-      console.error('Connection test failed:', error);
-      return false;
+      console.error('Hash test failed:', error);
+      throw error;
     }
   }
+
+  // ✅ ADD THIS METHOD TO DISCOVER AVAILABLE METHODS
+  // Replace the discoverAvailableMethods method with this:
+  async discoverAvailableMethods(): Promise<string[]> {
+    try {
+      const response = await axios.get('https://test-dmz.param.com.tr:4443/turkpos.ws/service_turkpos_test.asmx?wsdl', {
+        timeout: 10000
+      });
+
+      const wsdlContent: string = response.data as string;
+      console.log('📋 Raw WSDL content (first 1000 chars):', wsdlContent.substring(0, 1000));
+
+      // Try different patterns to find methods
+      const patterns = [
+        /<operation name="([^"]+)"/g,
+        /<wsdl:operation name="([^"]+)"/g,
+        /<soap:operation soapAction="[^"]*#([^"]+)"/g,
+        /<operation name='([^']+)'/g
+      ];
+
+      let methods: string[] = [];
+      for (const pattern of patterns) {
+        const matches = wsdlContent.match(pattern);
+        if (matches && matches.length > 0) {
+          methods = matches.map(m => {
+            const method = m.replace(/.*name=(["'])([^"']+)\1.*/, '$2');
+            return method;
+          });
+          break;
+        }
+      }
+
+      console.log('📋 Available methods:', methods);
+      return methods;
+    } catch (error) {
+      console.error('Failed to fetch WSDL:', error);
+      return [];
+    }
+  }
+
+  // ✅ ADD THIS ENHANCED CONNECTION TEST METHOD
+ // Update the testConnection method with Param-specific methods
+async testConnection(): Promise<boolean> {
+  try {
+    const methods = await this.discoverAvailableMethods();
+    console.log('🔍 Discovered methods:', methods);
+
+    // Param-specific method names
+    const paramMethods = [
+      'TP_Islem_Odeme',
+      'TP_Islem_Odeme_OnProv',
+      'TP_Islem_Odeme_Prov',
+      'TP_Islem_Sorgulama',
+      'TP_Islem_Iade',
+      'TP_Islem_Iade_OnProv',
+      'TP_Islem_Iade_Prov',
+      'BIN_SanalPos',
+      'SHA2B64',
+      'Islem_Odeme',
+      'Odeme'
+    ];
+
+    const testMethods = [...paramMethods, ...methods];
+
+    for (const method of testMethods) {
+      try {
+        console.log(`🔧 Testing method: ${method}`);
+        
+        const testData = {
+          G: this.getAuthObject(),
+          Test: 'test',
+          Data: 'test'
+        };
+
+        const result = await this.makeSoapRequest(method, testData);
+        console.log(`✅ Method ${method} works:`, result);
+        return true;
+      } catch (error) {
+        if (error instanceof Error) {
+          console.log(`❌ Method ${method} failed:`, error.message);
+        } else {
+          console.log(`❌ Method ${method} failed:`, error);
+        }
+        continue;
+      }
+    }
+    
+    return false;
+  } catch (error) {
+    console.error('Connection test failed:', error);
+    return false;
+  }
+}
 
   // ✅ DOĞRU: XML escape helper
   // ✅ FIXED CODE

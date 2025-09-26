@@ -1670,6 +1670,63 @@ app.get('/api/user/subscription', authMiddleware, async (req: CustomRequest, res
   }
 });
 
+
+// ✅ ADD THESE TEST ENDPOINTS TO index.ts
+
+// Test WSDL discovery
+app.get('/api/param/debug-wsdl', async (req: Request, res: Response) => {
+  try {
+    const paramAuth = createParamAuth();
+    const methods = await paramAuth.discoverAvailableMethods();
+    res.json({ 
+      success: true, 
+      methods,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// Test authentication and connection
+app.get('/api/param/test-auth', async (req: Request, res: Response) => {
+  try {
+    const paramAuth = createParamAuth();
+    const works = await paramAuth.testConnection();
+    res.json({ 
+      success: true, 
+      authenticationWorks: works,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// Test hash generation specifically
+app.get('/api/param/test-hash-method', async (req: Request, res: Response) => {
+  try {
+    const paramAuth = createParamAuth();
+    const result = await paramAuth.testHashGeneration();
+    res.json({ 
+      success: true, 
+      hashResult: result,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
 // Feature availability check endpoint
 app.get('/api/user/features', authMiddleware, async (req: CustomRequest, res: Response) => {
   try {
