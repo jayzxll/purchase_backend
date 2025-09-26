@@ -33,7 +33,7 @@ interface ParamPaymentData {
   Ref_URL: string;
 }
 
-// Param Authentication Class with SOAP-based SHA2B64 hash generation
+// ✅ DOĞRU: Param Authentication Class - Dokümana Uygun
 class ParamAuth {
   private clientCode: string;
   private clientUsername: string;
@@ -51,223 +51,220 @@ class ParamAuth {
     this.baseUrl = config.baseUrl;
   }
 
-  // Generate authentication hash using Param's SHA2B64 SOAP method
+  // ✅ DOĞRU: Param dokümanındaki hash formatı (Sayfa 7-8)
   async generateAuthHash(paymentData: ParamPaymentData): Promise<string> {
     try {
-      console.log('Generating hash using Param SOAP service...');
+      console.log('🔐 Generating Param hash according to documentation...');
 
-      // ✅ CORRECT HASH STRING ORDER FOR PARAM
-      const hashString = [
-        this.clientCode,
-        this.guid,
-        this.terminalNo,
-        paymentData.KK_No,
-        paymentData.KK_SK_Ay,
-        paymentData.KK_SK_Yil,
-        paymentData.KK_CVC,
-        paymentData.Islem_Tutar,
-        paymentData.Toplam_Tutar,
-        paymentData.Siparis_ID,
-        paymentData.Hata_URL,
-        paymentData.Basarili_URL,
-        this.clientPassword
-      ].join('');
+      // ✅ DOKÜMANDA BELİRTİLEN SIRALAMA (Sayfa 7):
+      // CLIENT_CODE + GUID + TerminalID + KK_No + KK_SK_Ay + KK_SK_Yil + KK_CVC + 
+      // Islem_Tutar + Toplam_Tutar + Siparis_ID + Hata_URL + Basarili_URL + CLIENT_PASSWORD
+      
+      const hashData = 
+        this.clientCode +
+        this.guid +
+        this.terminalNo +
+        paymentData.KK_No.replace(/\s/g, '') + // Kart numarasındaki boşlukları kaldır
+        paymentData.KK_SK_Ay.padStart(2, '0') + // Ay 2 haneli olmalı
+        paymentData.KK_SK_Yil.slice(-2) + // Yılın son 2 hanesi
+        paymentData.KK_CVC +
+        paymentData.Islem_Tutar +
+        paymentData.Toplam_Tutar +
+        paymentData.Siparis_ID +
+        paymentData.Hata_URL +
+        paymentData.Basarili_URL +
+        this.clientPassword;
 
-      console.log('Hash input string for SOAP:', hashString);
+      console.log('Hash input length:', hashData.length);
+      console.log('Hash input (first 100 chars):', hashData.substring(0, 100) + '...');
 
-      // ✅ CORRECT SOAP REQUEST FORMAT FOR PARAM
-      // In generateAuthHash method, update the SOAP request:
-      const soapRequest = `<?xml version="1.0" encoding="utf-8"?>
-<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" 
-               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
-               xmlns:xsd="http://www.w3.org/2001/XMLSchema">
-  <soap:Body>
-    <SHA2B64 xmlns="http://tempuri.org/">
-      <Data>${this.escapeXml(hashString)}</Data>
-    </SHA2B64>
-  </soap:Body>
-</soap:Envelope>`;
+      // ✅ DOKÜMANDA BELİRTİLEN HASH METODU: SHA1 + Base64
+      const hash = crypto.createHash('sha1').update(hashData, 'utf8').digest('binary');
+      const base64Hash = Buffer.from(hash, 'binary').toString('base64');
 
-      // ✅ ADD WSDL TO URL FOR TESTING
-      const soapEndpoint = `${this.baseUrl}?WSDL`;
+      console.log('✅ Generated SHA1+Base64 hash:', base64Hash);
+      return base64Hash;
 
-      const response = await axios.post(soapEndpoint, soapRequest, {
+    } catch (error: any) {
+      console.error('❌ Hash generation error:', error.message);
+      throw new Error('Hash oluşturulamadı: ' + error.message);
+    }
+  }
+
+  // ✅ DOĞRU: SOAP isteği için format (Doküman Sayfa 9)
+  async makeSoapRequest(action: string, requestData: any): Promise<any> {
+    try {
+      const soapRequest = this.buildSoapEnvelope(action, requestData);
+      
+      console.log('📤 SOAP Request to:', this.baseUrl);
+      console.log('SOAP Action:', action);
+
+      const response = await axios.post(this.baseUrl, soapRequest, {
         headers: {
           'Content-Type': 'text/xml; charset=utf-8',
-          'SOAPAction': 'http://tempuri.org/IService1/SHA2B64', // ← MUST MATCH EXACTLY
-          'User-Agent': 'ErosAI/1.0',
-          'Accept': 'text/xml'
+          'SOAPAction': `http://tempuri.org/${action}`,
+          'User-Agent': 'ErosAI/1.0'
         },
         timeout: 30000,
         responseType: 'text'
       });
 
-      console.log('SOAP Response status:', response.status);
-
-      // ✅ FIXED: Proper type handling for response data
-      const responseData = response.data as string;
-      console.log('SOAP Response data:', responseData);
-
-      // ✅ FIXED: Proper XML parsing
-      const hashMatch = responseData.match(/<SHA2B64Result>(.*?)<\/SHA2B64Result>/);
-      if (hashMatch && hashMatch[1]) {
-        const hash = hashMatch[1].trim();
-        console.log('Generated hash from Param:', hash);
-        return hash;
-      } else {
-        console.error('SOAP Response could not parse hash:', responseData);
-        throw new Error('Hash generation failed - no SHA2B64Result in response');
-      }
+      return this.parseSoapResponse(response.data as string, action);
     } catch (error: any) {
-      console.error('SOAP hash generation error:', error.message);
+      console.error('SOAP request error:', error.message);
       if (error.response) {
-        console.error('SOAP Error response status:', error.response.status);
-        console.error('SOAP Error response data:', error.response.data);
+        console.error('SOAP response status:', error.response.status);
+        console.error('SOAP response data:', error.response.data);
       }
-      throw new Error('SOAP hash generation failed: ' + error.message);
+      throw error;
     }
   }
 
-  // SHA1 + Base64 fonksiyonu ekleyin
-private async sha1Base64Encoded(data: string): Promise<string> {
-  // Node.js crypto modülü ile SHA1
-  const hash = crypto.createHash('sha1').update(data, 'utf8').digest('binary');
-  const base64Hash = Buffer.from(hash, 'binary').toString('base64');
-  return base64Hash;
-}
+  // ✅ DOĞRU: SOAP envelope oluşturma
+  private buildSoapEnvelope(action: string, requestData: any): string {
+    const requestBody = Object.keys(requestData)
+      .map(key => `<${key}>${this.escapeXml(requestData[key])}</${key}>`)
+      .join('');
 
-// Veya sync versiyonu:
-private sha1Base64EncodedSync(data: string): string {
-  const hash = crypto.createHash('sha1').update(data, 'utf8').digest('binary');
-  return Buffer.from(hash, 'binary').toString('base64');
-}
+    return `<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" 
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+               xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <soap:Body>
+    <${action} xmlns="http://tempuri.org/">
+      ${requestBody}
+    </${action}>
+  </soap:Body>
+</soap:Envelope>`;
+  }
 
-  // ✅ ALTERNATIVE: Use Param's direct HTTP endpoint
-  // ✅ ALTERNATIVE: Use Param's direct HTTP endpoint with SHA1
-async generateAuthHashDirect(paymentData: ParamPaymentData): Promise<string> {
-  try {
-    console.log('Trying direct HTTP endpoint for hash generation...');
+  // ✅ DOĞRU: SOAP response parsing
+  private parseSoapResponse(responseData: string, action: string): any {
+    try {
+       const resultMatch = responseData.match(/<([a-zA-Z:]+)?Result>(.*?)<\/([a-zA-Z:]+)?Result>/);
+      if (resultMatch && resultMatch[2]) {
+      return resultMatch[2].trim();
+    }
+      
+      // Error handling
+      const errorMatch = responseData.match(/<faultstring>(.*?)<\/faultstring>/);
+      if (errorMatch) {
+        throw new Error(`SOAP Error: ${errorMatch[1]}`);
+      }
+      
+      throw new Error('Invalid SOAP response format');
+    } catch (error) {
+      console.error('SOAP response parsing error:', error);
+      throw error;
+    }
+  }
 
-    const hashString = [
-      this.clientCode,
-      this.guid,
-      this.terminalNo,
-      paymentData.KK_No,
-      paymentData.KK_SK_Ay,
-      paymentData.KK_SK_Yil,
-      paymentData.KK_CVC,
-      paymentData.Islem_Tutar,
-      paymentData.Toplam_Tutar,
-      paymentData.Siparis_ID,
-      paymentData.Hata_URL,
-      paymentData.Basarili_URL,
-      this.clientPassword
-    ].join('');
-
-    // ✅ SHA1 kullan
-    const hashedData = this.sha1Base64EncodedSync(hashString);
-
-    // Try direct HTTP POST
-    const formData = new URLSearchParams();
-    formData.append('Data', hashedData); // ✅ SHA1 ile hashlenmiş datayı gönder
-
-    const response = await axios.post(this.baseUrl, formData, {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'ErosAI/1.0'
+  // ✅ DOĞRU: Ödeme işlemi için SOAP isteği (Doküman Sayfa 10)
+  async processPayment(paymentData: ParamPaymentData): Promise<any> {
+    const authHash = await this.generateAuthHash(paymentData);
+    
+    const soapRequestData = {
+      G: {
+        CLIENT_CODE: this.clientCode,
+        CLIENT_USERNAME: this.clientUsername,
+        CLIENT_PASSWORD: this.clientPassword
       },
-      timeout: 30000,
-      responseType: 'text'
-    });
+      Islem_Hash: authHash,
+      ...paymentData
+    };
 
-    const responseData = response.data as string;
-    console.log('Direct hash generation response:', responseData);
+    return await this.makeSoapRequest('TP_Islem_Odeme', soapRequestData);
+  }
 
-    if (responseData) {
-      return responseData.trim();
+  // ✅ DOĞRU: İşlem sorgulama (Doküman Sayfa 11)
+  async queryTransaction(transactionId: string): Promise<any> {
+    const queryData = {
+      G: {
+        CLIENT_CODE: this.clientCode,
+        CLIENT_USERNAME: this.clientUsername,
+        CLIENT_PASSWORD: this.clientPassword
+      },
+      GUID: this.guid,
+      Siparis_ID: transactionId,
+      Dekont_ID: transactionId
+    };
+
+    return await this.makeSoapRequest('TP_Islem_Sorgulama', queryData);
+  }
+
+  // ✅ DOĞRU: BIN sorgulama (Kart bilgileri için)
+  async queryBIN(cardNumber: string): Promise<any> {
+    const binData = {
+      G: {
+        CLIENT_CODE: this.clientCode,
+        CLIENT_USERNAME: this.clientUsername,
+        CLIENT_PASSWORD: this.clientPassword
+      },
+      BIN: cardNumber.substring(0, 6) // İlk 6 hane
+    };
+
+    return await this.makeSoapRequest('BIN_SanalPos', binData);
+  }
+
+  // ✅ DOĞRU: Test bağlantısı
+  async testConnection(): Promise<boolean> {
+    try {
+      const testData = {
+        G: {
+          CLIENT_CODE: this.clientCode,
+          CLIENT_USERNAME: this.clientUsername,
+          CLIENT_PASSWORD: this.clientPassword
+        },
+        GUID: this.guid,
+        Terminal_ID: this.terminalNo
+      };
+
+      const result = await this.makeSoapRequest('TP_Islem_Odeme_Test', testData);
+      return result.includes('BAŞARILI') || result.includes('1');
+    } catch (error) {
+      console.error('Connection test failed:', error);
+      return false;
     }
+  }
 
-    throw new Error('Empty response from direct endpoint');
-
-  } catch (error: any) {
-    console.error('Direct hash generation failed:', error.message);
-    throw error;
+  // ✅ DOĞRU: XML escape helper
+// ✅ FIXED CODE
+private escapeXml(unsafe: any): string {
+  try {
+    // Handle null/undefined
+    if (unsafe === null || unsafe === undefined) {
+      return '';
+    }
+    
+    // Convert to string
+    const stringValue = String(unsafe);
+    
+    // Escape XML special characters
+    return stringValue
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/'/g, '&apos;')
+      .replace(/"/g, '&quot;');
+  } catch (error) {
+    console.error('XML escape error:', error);
+    return ''; // Return empty string on error
   }
 }
 
-  // Helper method to escape XML special characters
-  private escapeXml(unsafe: string): string {
-    return unsafe.replace(/[<>&'"]/g, (c) => {
-      switch (c) {
-        case '<': return '&lt;';
-        case '>': return '&gt;';
-        case '&': return '&amp;';
-        case '\'': return '&apos;';
-        case '"': return '&quot;';
-        default: return c;
-      }
-    });
-  }
-
-  // Fallback method: local hash generation (for testing or backup)
-  generateAuthHashLocal(paymentData: ParamPaymentData): string {
-  console.log('Using local SHA1 hash generation (fallback)');
-
-  const hashString = [
-    this.clientCode,
-    this.guid,
-    this.terminalNo,
-    paymentData.KK_No,
-    paymentData.KK_SK_Ay,
-    paymentData.KK_SK_Yil,
-    paymentData.KK_CVC,
-    paymentData.Islem_Tutar,
-    paymentData.Toplam_Tutar,
-    paymentData.Siparis_ID,
-    paymentData.Hata_URL,
-    paymentData.Basarili_URL,
-    this.clientPassword
-  ].join('');
-
-  console.log('Local hash input:', hashString);
-  
-  // ✅ DEĞİŞTİ: SHA256 yerine SHA1 kullan
-  // SHA1 hash followed by Base64 encoding
-  const hash = crypto.createHash('sha1').update(hashString, 'utf8').digest('binary');
-  const base64Hash = Buffer.from(hash, 'binary').toString('base64');
-  
-  console.log('Local generated SHA1 hash:', base64Hash);
-  return base64Hash;
-}
-
-  // Get authentication object for API requests
+  // ✅ DOĞRU: Get authentication object
   getAuthObject() {
     return {
       CLIENT_CODE: this.clientCode,
       CLIENT_USERNAME: this.clientUsername,
-      CLIENT_PASSWORD: this.clientPassword,
+      CLIENT_PASSWORD: this.clientPassword
     };
   }
 
-  // Generate complete request with auth
+  // ✅ DOĞRU: Generate complete authenticated request
   async generateAuthenticatedRequest(paymentData: ParamPaymentData): Promise<any> {
-    let authHash: string;
-
-    try {
-      // First try SOAP
-      authHash = await this.generateAuthHash(paymentData);
-    } catch (soapError) {
-      console.warn('SOAP hash failed, trying direct method...');
-      try {
-        // Then try direct HTTP
-        authHash = await this.generateAuthHashDirect(paymentData);
-      } catch (directError) {
-        console.warn('Direct hash failed, falling back to local generation');
-        // Finally use local fallback
-        authHash = this.generateAuthHashLocal(paymentData);
-      }
-    }
-
+    const authHash = await this.generateAuthHash(paymentData);
+    
     return {
       G: this.getAuthObject(),
       Islem_Hash: authHash,
@@ -276,55 +273,44 @@ async generateAuthHashDirect(paymentData: ParamPaymentData): Promise<string> {
   }
 }
 
-// ✅ FIXED: Proper createParamAuth function with explicit return type
+// ✅ DOĞRU: Environment-based auth factory
 export function createParamAuth(): ParamAuth {
   const developmentMode = process.env.PARAM_DEVELOPMENT_MODE === 'true';
 
-  const clientCode = developmentMode ?
-    process.env.PARAM_CLIENT_CODE :
-    process.env.PARAM_PROD_CLIENT_CODE;
+  const config = {
+    clientCode: developmentMode ? 
+      process.env.PARAM_CLIENT_CODE : 
+      process.env.PARAM_PROD_CLIENT_CODE,
+    
+    clientUsername: developmentMode ? 
+      process.env.PARAM_CLIENT_USERNAME : 
+      process.env.PARAM_PROD_CLIENT_USERNAME,
+    
+    clientPassword: developmentMode ? 
+      process.env.PARAM_CLIENT_PASSWORD : 
+      process.env.PARAM_PROD_CLIENT_PASSWORD,
+    
+    terminalNo: developmentMode ? 
+      process.env.PARAM_TERMINAL_NO : 
+      process.env.PARAM_PROD_TERMINAL_NO,
+    
+    guid: developmentMode ? process.env.PARAM_GUID! : process.env.PARAM_PROD_GUID!,
+    
+    baseUrl: developmentMode ? 
+      process.env.PARAM_BASE_URL : 
+      process.env.PARAM_PROD_BASE_URL
+  };
 
-  const clientUsername = developmentMode ?
-    process.env.PARAM_CLIENT_USERNAME :
-    process.env.PARAM_PROD_CLIENT_USERNAME;
+  // ✅ Validation
+  const missingVars = Object.entries(config)
+    .filter(([key, value]) => !value)
+    .map(([key]) => key);
 
-  const clientPassword = developmentMode ?
-    process.env.PARAM_CLIENT_PASSWORD :
-    process.env.PARAM_PROD_CLIENT_PASSWORD;
-
-  const terminalNo = developmentMode ?
-    process.env.PARAM_TERMINAL_NO :
-    process.env.PARAM_PROD_TERMINAL_NO;
-
-  const guid = developmentMode ?
-    process.env.PARAM_GUID :
-    process.env.PARAM_PROD_GUID;
-
-  const baseUrl = developmentMode ?
-    process.env.PARAM_BASE_URL :
-    process.env.PARAM_PROD_BASE_URL;
-
-  if (!clientCode || !clientUsername || !clientPassword || !terminalNo || !guid || !baseUrl) {
-    const missingVars = {
-      clientCode: !clientCode,
-      clientUsername: !clientUsername,
-      clientPassword: !clientPassword,
-      terminalNo: !terminalNo,
-      guid: !guid,
-      baseUrl: !baseUrl
-    };
-    console.error('Missing Param credentials:', missingVars);
-    throw new Error('Param authentication credentials are missing');
+  if (missingVars.length > 0) {
+    throw new Error(`Missing Param configuration: ${missingVars.join(', ')}`);
   }
 
-  return new ParamAuth({
-    clientCode: clientCode!,
-    clientUsername: clientUsername!,
-    clientPassword: clientPassword!,
-    terminalNo: terminalNo!,
-    guid: guid!,
-    baseUrl: baseUrl!
-  });
+  return new ParamAuth(config as ParamAuthConfig);
 }
 
 // Export types and class
