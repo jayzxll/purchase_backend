@@ -33,7 +33,7 @@ interface ParamPaymentData {
   Ref_URL: string;
 }
 
-// ✅ FIXED: Param Authentication Class
+// ✅ FIXED: Param Authentication Class with correct SOAP Action
 class ParamAuth {
   private clientCode: string;
   private clientUsername: string;
@@ -87,65 +87,71 @@ class ParamAuth {
     }
   }
 
-  // ✅ FIXED: SOAP request method with correct SOAP Action
+  // ✅ FIXED: SOAP request method with multiple SOAP Action formats
   async makeSoapRequest(action: string, requestData: any): Promise<any> {
-    try {
-      console.log(`🔧 Making SOAP request to: ${this.baseUrl}`);
-      console.log(`🔧 Action: ${action}`);
+    // ✅ TRY DIFFERENT SOAP ACTION FORMATS THAT PARAM MIGHT EXPECT
+    const soapActionFormats = [
+      `TP_Islem_Odeme`,  // Just the method name
+      `"TP_Islem_Odeme"`, // Method name in quotes
+      `"http://tempuri.org/TP_Islem_Odeme"`, // Full URI in quotes
+      `http://tempuri.org/TP_Islem_Odeme`, // Full URI without quotes
+      `"TP_Islem_Odeme"`, // Double quotes
+      `'TP_Islem_Odeme'`, // Single quotes
+      `urn:TP_Islem_Odeme`, // URN format
+      ``, // Empty SOAP Action (some services accept this)
+    ];
 
-      // ✅ FIX: Use dynamic SOAP Action based on the method being called
-      const soapAction = `http://tempuri.org/${action}`;
-      console.log(`🔧 SOAP Action: ${soapAction}`);
-
-      const soapRequest = this.buildSoapEnvelope(action, requestData);
-      console.log('SOAP Request (first 500 chars):', soapRequest.substring(0, 500));
-
-      const headers: any = {
-        'Content-Type': 'text/xml; charset=utf-8',
-        'SOAPAction': soapAction,
-        'User-Agent': 'ErosAI/1.0'
-      };
-
-      console.log('Request headers:', { 
-        'Content-Type': headers['Content-Type'],
-        'SOAPAction': headers['SOAPAction'] 
-      });
-
-      // ✅ FIX: Make sure we're using the correct endpoint
-      const response = await axios.post(this.baseUrl, soapRequest, {
-        headers: headers,
-        timeout: 30000,
-        responseType: 'text'
-      });
-
-      console.log('✅ SOAP Response received, status:', response.status);
-      console.log('Response data (first 500 chars):', (response.data as string).substring(0, 500));
-      
-      return this.parseSoapResponse(response.data as string, action);
-      
-    } catch (error: any) {
-      console.error('❌ SOAP Request failed:');
-      console.error('Error message:', error.message);
-      
-      if (error.response) {
-        console.error('Response status:', error.response.status);
-        console.error('Response headers:', error.response.headers);
+    for (const soapAction of soapActionFormats) {
+      try {
+        console.log(`🔧 Trying SOAP Action: "${soapAction}"`);
         
-        if (error.response.data) {
-          console.error('Response data (first 1000 chars):', 
-            error.response.data.toString().substring(0, 1000));
+        const soapRequest = this.buildSoapEnvelope(action, requestData);
+        console.log('SOAP Request (first 500 chars):', soapRequest.substring(0, 500));
+
+        const headers: any = {
+          'Content-Type': 'text/xml; charset=utf-8',
+          'User-Agent': 'ErosAI/1.0'
+        };
+
+        // Only add SOAPAction header if it's not empty
+        if (soapAction !== '') {
+          headers['SOAPAction'] = soapAction;
         }
+
+        console.log('Request headers:', headers);
+
+        const response = await axios.post(this.baseUrl, soapRequest, {
+          headers: headers,
+          timeout: 30000,
+          responseType: 'text'
+        });
+
+        console.log('✅ SOAP Response received with SOAP Action:', soapAction);
+        console.log('Response status:', response.status);
+        
+        return this.parseSoapResponse(response.data as string, action);
+        
+      } catch (error: any) {
+        if (error.response && error.response.data) {
+          const errorText = error.response.data.toString();
+          
+          // Check if this is a SOAP Action error
+          if (errorText.includes('did not recognize') || errorText.includes('SOAPAction')) {
+            console.log(`❌ SOAP Action rejected: "${soapAction}"`);
+            continue; // Try next format
+          }
+        }
+        
+        // If it's not a SOAP Action error, rethrow
+        console.error(`❌ Error with SOAP Action "${soapAction}":`, error.message);
+        throw error;
       }
-      
-      if (error.code) {
-        console.error('Error code:', error.code);
-      }
-      
-      throw new Error(`SOAP request failed: ${error.message}`);
     }
+    
+    throw new Error('All SOAP Action formats failed. Param service might be unavailable.');
   }
 
-  // ✅ FIXED: SOAP envelope building
+  // ✅ FIXED: SOAP envelope building with correct namespace
   private buildSoapEnvelope(action: string, requestData: any): string {
     let requestBody = '';
 
@@ -171,14 +177,15 @@ class ParamAuth {
       requestBody += buildXmlElement(key, value);
     }
 
+    // ✅ FIXED: Use correct namespace for Param POS
     return `<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" 
                xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
                xmlns:xsd="http://www.w3.org/2001/XMLSchema">
   <soap:Body>
-    <${action} xmlns="http://tempuri.org/">
+    <TP_Islem_Odeme xmlns="http://tempuri.org/">
       ${requestBody}
-    </${action}>
+    </TP_Islem_Odeme>
   </soap:Body>
 </soap:Envelope>`;
   }
@@ -188,55 +195,50 @@ class ParamAuth {
     try {
       console.log('Parsing SOAP response...');
       
-      // Remove namespaces for easier parsing
-      const cleanData = responseData.replace(/xmlns(:[^=]*)?="[^"]*"/g, '');
-      
-      // Try to find the result element specific to Param POS
-      const resultPatterns = [
-        new RegExp(`<${action}Result>(.*?)</${action}Result>`),
-        new RegExp(`<${action}Response>(.*?)</${action}Response>`),
-        /<Result>(.*?)<\/Result>/,
-        /<Sonuc>(.*?)<\/Sonuc>/
-      ];
-
-      for (const pattern of resultPatterns) {
-        const match = cleanData.match(pattern);
-        if (match && match[1]) {
-          console.log('Found result with pattern:', pattern);
-          return this.parseParamResult(match[1]);
-        }
-      }
-
-      // Check for SOAP fault
-      const faultMatch = responseData.match(/<faultstring>(.*?)<\/faultstring>/);
+      // Check for SOAP fault first
+      const faultMatch = responseData.match(/<faultstring[^>]*>(.*?)<\/faultstring>/i);
       if (faultMatch) {
         throw new Error(`SOAP Fault: ${faultMatch[1]}`);
       }
 
-      // If no specific result found, try to parse as XML
-      try {
-        // Simple XML to object conversion for Param responses
-        const result: any = {};
-        const matches = cleanData.match(/<([^>]+)>([^<]*)<\/\1>/g);
-        
-        if (matches) {
-          matches.forEach(match => {
-            const tagMatch = match.match(/<([^>]+)>([^<]*)<\/\1>/);
-            if (tagMatch) {
-              result[tagMatch[1]] = tagMatch[2];
-            }
-          });
-        }
+      // Try to extract the response content
+      const bodyMatch = responseData.match(/<soap:Body[^>]*>(.*?)<\/soap:Body>/is);
+      if (!bodyMatch) {
+        throw new Error('No SOAP Body found in response');
+      }
 
-        if (Object.keys(result).length > 0) {
-          return result;
+      const bodyContent = bodyMatch[1];
+      
+      // Try different response patterns
+      const resultPatterns = [
+        /<TP_Islem_OdemeResult[^>]*>(.*?)<\/TP_Islem_OdemeResult>/is,
+        /<TP_Islem_OdemeResponse[^>]*>(.*?)<\/TP_Islem_OdemeResponse>/is,
+        /<Result[^>]*>(.*?)<\/Result>/i,
+        /<Sonuc[^>]*>(.*?)<\/Sonuc>/i
+      ];
+
+      for (const pattern of resultPatterns) {
+        const match = bodyContent.match(pattern);
+        if (match && match[1]) {
+          console.log('Found result with pattern');
+          return this.parseParamResult(match[1]);
         }
-      } catch (parseError) {
-        console.log('XML parsing failed, returning raw response');
+      }
+
+      // If no specific pattern found, try to parse all XML elements
+      const result: any = {};
+      const tagMatches = bodyContent.matchAll(/<([^>]+)>([^<]*)<\/\1>/g);
+      
+      for (const match of tagMatches) {
+        result[match[1]] = match[2];
+      }
+
+      if (Object.keys(result).length > 0) {
+        return result;
       }
 
       // Return raw response if parsing fails
-      return { rawResponse: responseData };
+      return { rawResponse: responseData, bodyContent: bodyContent };
       
     } catch (error) {
       console.error('SOAP response parsing error:', error);
@@ -251,14 +253,14 @@ class ParamAuth {
     // Extract common Param POS fields
     const fields = [
       'Sonuc', 'Sonuc_Str', 'UCD_URL', 'Islem_ID', 'Siparis_ID', 
-      'Dekont_ID', 'Banka_Sonuc_Kod', 'Redirect_URL'
+      'Dekont_ID', 'Banka_Sonuc_Kod', 'Redirect_URL', 'Islem_GUID'
     ];
     
     fields.forEach(field => {
-      const regex = new RegExp(`<${field}>(.*?)</${field}>`);
+      const regex = new RegExp(`<${field}[^>]*>(.*?)</${field}>`, 'i');
       const match = resultXml.match(regex);
       if (match) {
-        result[field] = match[1];
+        result[field] = match[1].trim();
       }
     });
     
@@ -309,39 +311,67 @@ class ParamAuth {
     }
   }
 
-  // ✅ Test connection method
-  async testConnection(): Promise<boolean> {
-    try {
-      console.log('🔧 Testing Param connection...');
-      
-      // Test with SHA2B64 method first (usually available)
-      const testData = {
-        G: this.getAuthObject(),
-        Data: 'test'
-      };
+  // ✅ Test connection with different methods
+  async testConnection(): Promise<{success: boolean; workingAction?: string; error?: string}> {
+    const testMethods = [
+      'SHA2B64',
+      'BIN_SanalPos',
+      'TP_Islem_Odeme'
+    ];
 
-      const result = await this.makeSoapRequest('SHA2B64', testData);
-      console.log('✅ Connection test successful:', result);
-      return true;
-      
-    } catch (error) {
-      console.log('❌ SHA2B64 test failed, trying BIN_SanalPos...');
-      
+    for (const method of testMethods) {
       try {
-        // Try another method
-        const testData = {
-          G: this.getAuthObject(),
-          BIN: '450803' // Test BIN number
+        console.log(`🔧 Testing method: ${method}`);
+        
+        let testData: any = {
+          G: this.getAuthObject()
         };
 
-        const result = await this.makeSoapRequest('BIN_SanalPos', testData);
-        console.log('✅ BIN_SanalPos test successful');
-        return true;
-      } catch (error2) {
-        console.error('❌ All connection tests failed');
-        return false;
+        // Add method-specific test data
+        if (method === 'BIN_SanalPos') {
+          testData.BIN = '450803';
+        } else if (method === 'SHA2B64') {
+          testData.Data = 'test';
+        } else {
+          // For TP_Islem_Odeme, use minimal test data
+          testData = {
+            G: this.getAuthObject(),
+            Islem_Hash: 'test',
+            SanalPOS_ID: '10738',
+            Doviz: 'TRY',
+            GUID: this.guid,
+            KK_Sahibi: 'Test',
+            KK_No: '4508030000000000',
+            KK_SK_Ay: '12',
+            KK_SK_Yil: '25',
+            KK_CVC: '000',
+            Hata_URL: 'https://test.com/error',
+            Basarili_URL: 'https://test.com/success',
+            Siparis_ID: 'TEST' + Date.now(),
+            Siparis_Aciklama: 'Test',
+            Taksit: '1',
+            Islem_Tutar: '1,00',
+            Toplam_Tutar: '1,00',
+            Islem_ID: 'TEST' + Date.now(),
+            IPAdr: '127.0.0.1',
+            Ref_URL: 'https://test.com'
+          };
+        }
+
+        const result = await this.makeSoapRequest(method, testData);
+        console.log(`✅ Method ${method} works`);
+        return { success: true, workingAction: method };
+        
+      } catch (error: any) {
+        console.log(`❌ Method ${method} failed:`, error.message);
+        continue;
       }
     }
+
+    return { 
+      success: false, 
+      error: 'All connection tests failed. Check Param service availability.' 
+    };
   }
 
   // ✅ XML escape helper
@@ -384,7 +414,7 @@ class ParamAuth {
     };
   }
 
-  // ✅ KART SAKLAMA METODU
+  
  // ✅ KART SAKLAMA METODU
   async saveCreditCard(cardData: {
     KK_Sahibi: string;
