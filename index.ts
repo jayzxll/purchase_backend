@@ -605,6 +605,7 @@ const PARAM_ENDPOINTS = {
 };
 
 // Enhanced Create Param payment endpoint with comprehensive validation
+// FIXED: Update the Param payment endpoint in index.ts
 app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest, res: Response) => {
   try {
     const {
@@ -620,7 +621,7 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
       installment = '1'
     } = req.body;
 
-    // ✅ DOĞRU: Validation
+    // ✅ Validation
     const validation = validateParamPaymentRequest(req.body);
     if (!validation.isValid) {
       return res.status(400).json({ error: validation.error });
@@ -629,38 +630,42 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
     const paramAuth = createParamAuth();
     const amount = getParamPrice(subscriptionType);
 
-    // ✅ DOĞRU: Payment data (Doküman Sayfa 6)
+    // ✅ DOĞRU: Payment data with correct structure
     const paymentData: ParamPaymentData = {
-      SanalPOS_ID: process.env.PARAM_SANAL_POS_ID || PARAM_ENDPOINTS.TEST.SANAL_POS_ID,
+      SanalPOS_ID: process.env.PARAM_SANAL_POS_ID || '10738',
       Doviz: 'TRY',
-      GUID: process.env.PARAM_GUID!,
+      GUID: process.env.PARAM_GUID!, // This will be overridden by paramAuth
       KK_Sahibi: cardHolderName.trim(),
       KK_No: cardNumber.replace(/\s/g, ''),
       KK_SK_Ay: cardExpMonth.padStart(2, '0'),
-      KK_SK_Yil: cardExpYear.slice(-2), // Son 2 hane
+      KK_SK_Yil: cardExpYear.length === 4 ? cardExpYear.slice(-2) : cardExpYear,
       KK_CVC: cardCVC,
-      KK_Sahibi_GSM: cardHolderPhone?.replace(/\D/g, '') || '',
-      Hata_URL: 'https://www.erosaidating.com/payment-error',
-      Basarili_URL: 'https://www.erosaidating.com/payment-success',
+      KK_Sahibi_GSM: cardHolderPhone?.replace(/\D/g, '') || '5551234567',
+      Hata_URL: `${process.env.FRONTEND_URL || 'https://www.erosaidating.com'}/payment-error`,
+      Basarili_URL: `${process.env.FRONTEND_URL || 'https://www.erosaidating.com'}/payment-success`,
       Siparis_ID: `TRX${Date.now()}${Math.random().toString(36).substr(2, 6)}`,
       Siparis_Aciklama: `ErosAI ${getSubscriptionDisplayName(subscriptionType)}`,
       Taksit: installment,
-      Islem_Tutar: amount.toFixed(2),
-      Toplam_Tutar: amount.toFixed(2),
+      Islem_Tutar: amount.toFixed(2).replace('.', ','), // Param expects comma for decimals
+      Toplam_Tutar: amount.toFixed(2).replace('.', ','), // Param expects comma for decimals
       Islem_ID: `ISL${Date.now()}`,
       IPAdr: req.ip || req.connection.remoteAddress || '192.168.1.1',
-      Ref_URL: 'https://www.erosaidating.com'
+      Ref_URL: process.env.FRONTEND_URL || 'https://www.erosaidating.com'
     };
+
+    console.log('Payment data prepared:', paymentData);
 
     // ✅ DOĞRU: SOAP isteği gönder
     const result = await paramAuth.processPayment(paymentData);
 
-    // ✅ DOĞRU: Response handling (Doküman Sayfa 12)
-    if (result && result.Sonuc === '1') {
+    console.log('Param API response:', result);
+
+    // ✅ DOĞRU: Response handling
+    if (result && (result.Sonuc === '1' || result.Sonuc === 1)) {
       // Başarılı
       res.json({
         success: true,
-        paymentUrl: result.Redirect_URL,
+        paymentUrl: result.UCD_URL || result.Redirect_URL,
         transactionId: paymentData.Siparis_ID,
         message: 'Ödeme başlatıldı'
       });
@@ -668,13 +673,51 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
       // Hata
       res.status(400).json({
         success: false,
-        error: result.Sonuc_Aciklama || 'Ödeme başlatılamadı'
+        error: result.Sonuc_Str || result.Sonuc_Aciklama || 'Ödeme başlatılamadı'
       });
     }
 
   } catch (error: any) {
     console.error('Param payment error:', error);
-    res.status(500).json({ error: 'Ödeme işlemi başarısız' });
+    
+    // More detailed error logging
+    if (error.response) {
+      console.error('Error response status:', error.response.status);
+      console.error('Error response data:', error.response.data);
+    }
+    
+    res.status(500).json({ 
+      error: 'Ödeme işlemi başarısız',
+      details: error.message 
+    });
+  }
+});
+
+// Add this debug endpoint to test Param connectivity
+app.post('/api/param/debug-test', authMiddleware, async (req: CustomRequest, res: Response) => {
+  try {
+    const paramAuth = createParamAuth();
+    
+    // Test with minimal data
+    const testData = {
+      G: paramAuth.getAuthObject(),
+      Test: 'test'
+    };
+
+    // Test basic connectivity
+    const result = await paramAuth.makeSoapRequest('SHA2B64', testData);
+    
+    res.json({
+      success: true,
+      message: 'Param API is accessible',
+      result: result
+    });
+  } catch (error: any) {
+    res.json({
+      success: false,
+      error: error.message,
+      stack: error.stack
+    });
   }
 });
 
