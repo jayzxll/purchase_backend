@@ -1868,3 +1868,230 @@ app.listen(PORT, () => {
   console.log(`🔐 API endpoints ready for purchase verification`);
   console.log(`🍋 Lemon Squeezy and Param endpoints configured`);
 });
+
+// index.ts'ye bu endpointleri ekleyin
+
+// ✅ KART SAKLAMA ENDPOINT'İ
+app.post('/api/param/save-card', authMiddleware, async (req: CustomRequest, res: Response) => {
+  try {
+    const {
+      cardHolderName,
+      cardNumber,
+      cardExpMonth,
+      cardExpYear,
+      cardAlias
+    } = req.body;
+
+    const userId = req.user.uid;
+
+    // Kart detaylarını validate et
+    const validation = validateCardDetails(req.body);
+    if (!validation.isValid) {
+      return res.status(400).json({ error: validation.error });
+    }
+
+    const paramAuth = createParamAuth();
+
+    // Kartı Param'a kaydet
+    const saveResult = await paramAuth.saveCreditCard({
+      KK_Sahibi: cardHolderName.trim(),
+      KK_No: cardNumber.replace(/\s/g, ''),
+      KK_SK_Ay: cardExpMonth.padStart(2, '0'),
+      KK_SK_Yil: cardExpYear.slice(-2),
+      KK_Kart_Adi: cardAlias || `Kart-${userId.substring(0, 8)}`
+    });
+
+    if (!saveResult.success) {
+      return res.status(400).json({ error: saveResult.error });
+    }
+
+    // Firestore'a kaydet
+    await admin.firestore().collection('user_cards').doc(userId).collection('cards').doc(saveResult.KS_GUID!).set({
+      KS_GUID: saveResult.KS_GUID,
+      cardHolderName: cardHolderName,
+      cardNumber: `****${cardNumber.slice(-4)}`,
+      expMonth: cardExpMonth,
+      expYear: cardExpYear,
+      alias: cardAlias,
+      savedAt: new Date(),
+      isActive: true
+    });
+
+    res.json({
+      success: true,
+      KS_GUID: saveResult.KS_GUID,
+      message: 'Kart başarıyla kaydedildi'
+    });
+
+  } catch (error: any) {
+    console.error('Kart saklama hatası:', error);
+    res.status(500).json({ error: 'Kart kaydedilemedi' });
+  }
+});
+
+// ✅ SAKLI KARTLARI LİSTELE
+app.get('/api/param/saved-cards', authMiddleware, async (req: CustomRequest, res: Response) => {
+  try {
+    const userId = req.user.uid;
+    
+    const cardsSnapshot = await admin.firestore()
+      .collection('user_cards')
+      .doc(userId)
+      .collection('cards')
+      .where('isActive', '==', true)
+      .get();
+
+    const cards = cardsSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    res.json({ success: true, cards });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Kartlar yüklenemedi' });
+  }
+});
+
+// ✅ TEKRARLAYAN ÖDEME İÇİN SAKLI KART KULLAN
+app.post('/api/param/recurring-payment', authMiddleware, async (req: CustomRequest, res: Response) => {
+  try {
+    const {
+      KS_GUID,
+      CVV,
+      subscriptionType,
+      installment = '1'
+    } = req.body;
+
+    const userId = req.user.uid;
+    const user = await admin.auth().getUser(userId);
+
+    // Kart bilgilerini doğrula
+    const cardDoc = await admin.firestore()
+      .collection('user_cards')
+      .doc(userId)
+      .collection('cards')
+      .doc(KS_GUID)
+      .get();
+
+    if (!cardDoc.exists) {
+      return res.status(404).json({ error: 'Kayıtlı kart bulunamadı' });
+    }
+
+    const cardData = cardDoc.data();
+    const amount = getParamPrice(subscriptionType);
+
+    const paramAuth = createParamAuth();
+
+    // Saklı kartla ödeme yap
+    const paymentResult = await paramAuth.paymentWithSavedCard({
+      KS_GUID: KS_GUID,
+      CVV: CVV,
+      KK_Sahibi_GSM: user.phoneNumber?.replace(/\D/g, '') || '5551234567',
+      Hata_URL: 'https://www.erosaidating.com/payment-error',
+      Basarili_URL: 'https://www.erosaidating.com/payment-success',
+      Siparis_ID: `REC-${Date.now()}-${userId.substring(0, 8)}`,
+      Siparis_Aciklama: `ErosAI ${getSubscriptionDisplayName(subscriptionType)} - Tekrarlayan Ödeme`,
+      Taksit: installment,
+      Islem_Tutar: amount.toFixed(2),
+      Toplam_Tutar: amount.toFixed(2),
+      Islem_Guvenlik_Tip: 'NS', // Non-secure for recurring payments
+      IPAdr: req.ip || '192.168.1.1',
+      Ref_URL: 'https://www.erosaidating.com'
+    });
+
+    if (paymentResult.Sonuc && parseInt(paymentResult.Sonuc) > 0) {
+      // Ödeme başarılı - aboneliği güncelle
+      const expiryDate = calculateExpiryDate(subscriptionType);
+
+      await admin.firestore().collection('users').doc(userId).set({
+        subscription: {
+          type: subscriptionType,
+          purchase_date: new Date(),
+          expiry_date: expiryDate,
+          purchase_token: paymentResult.Islem_ID,
+          product_id: `param_${subscriptionType}`,
+          platform: 'param',
+          status: 'active',
+          payment_method: 'saved_card',
+          KS_GUID: KS_GUID,
+          is_recurring: true,
+          last_updated: new Date(),
+        },
+        accountPlan: subscriptionType,
+        expirationDate: expiryDate.toISOString(),
+        last_updated: new Date(),
+      }, { merge: true });
+
+      // Ödeme kaydı oluştur
+      await admin.firestore().collection('recurring_payments').doc(paymentResult.Islem_ID).set({
+        user_id: userId,
+        KS_GUID: KS_GUID,
+        subscription_type: subscriptionType,
+        amount: amount,
+        transaction_id: paymentResult.Islem_ID,
+        payment_date: new Date(),
+        status: 'completed',
+        next_payment_date: calculateNextPaymentDate(subscriptionType)
+      });
+
+      res.json({
+        success: true,
+        transactionId: paymentResult.Islem_ID,
+        message: 'Ödeme başarıyla tamamlandı'
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        error: paymentResult.Sonuc_Str || 'Ödeme başarısız'
+      });
+    }
+
+  } catch (error: any) {
+    console.error('Tekrarlayan ödeme hatası:', error);
+    res.status(500).json({ error: 'Ödeme işlemi başarısız' });
+  }
+});
+
+// ✅ YARDIMCI FONKSİYONLAR
+function validateCardDetails(cardData: any): { isValid: boolean; error?: string } {
+  const { cardHolderName, cardNumber, cardExpMonth, cardExpYear } = cardData;
+
+  if (!cardHolderName || cardHolderName.trim().length === 0) {
+    return { isValid: false, error: 'Kart sahibi adı gerekli' };
+  }
+
+  const cleanCardNumber = cardNumber.replace(/\s/g, '');
+  if (!cleanCardNumber || cleanCardNumber.length !== 16) {
+    return { isValid: false, error: 'Geçersiz kart numarası' };
+  }
+
+  if (!/^\d{16}$/.test(cleanCardNumber)) {
+    return { isValid: false, error: 'Kart numarası sadece rakam içermeli' };
+  }
+
+  return { isValid: true };
+}
+
+function calculateNextPaymentDate(subscriptionType: string): Date {
+  const nextDate = new Date();
+  
+  switch (subscriptionType) {
+    case 'basic_monthly':
+    case 'premium_monthly':
+    case 'vip_monthly':
+      nextDate.setMonth(nextDate.getMonth() + 1);
+      break;
+    case 'basic_3months':
+    case 'premium_3months':
+    case 'vip_3months':
+      nextDate.setMonth(nextDate.getMonth() + 3);
+      break;
+    case 'basic_yearly':
+    case 'premium_yearly':
+    case 'vip_yearly':
+      nextDate.setFullYear(nextDate.getFullYear() + 1);
+      break;
+  }
+  
+  return nextDate;
+}

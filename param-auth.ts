@@ -398,6 +398,151 @@ async testConnection(): Promise<boolean> {
       ...paymentData
     };
   }
+
+// ✅ KART SAKLAMA METODU
+  async saveCreditCard(cardData: {
+    KK_Sahibi: string;
+    KK_No: string;
+    KK_SK_Ay: string;
+    KK_SK_Yil: string;
+    KK_Kart_Adi?: string;
+    KK_Islem_ID?: string;
+  }): Promise<{ success: boolean; KS_GUID?: string; error?: string }> {
+    try {
+      const soapRequestData = {
+        G: this.getAuthObject(),
+        GUID: this.guid,
+        KK_Sahibi: cardData.KK_Sahibi,
+        KK_No: cardData.KK_No.replace(/\s/g, ''),
+        KK_SK_Ay: cardData.KK_SK_Ay.padStart(2, '0'),
+        KK_SK_Yil: cardData.KK_SK_Yil,
+        KK_Kart_Adi: cardData.KK_Kart_Adi || `Kart-${Date.now()}`,
+        KK_Islem_ID: cardData.KK_Islem_ID || `CARD-${Date.now()}`
+      };
+
+      const result = await this.makeSoapRequest('KK_Saklama', soapRequestData);
+      
+      // Response parsing
+      if (result && result.Sonuc && parseInt(result.Sonuc) > 0) {
+        return {
+          success: true,
+          KS_GUID: result.KS_GUID
+        };
+      } else {
+        return {
+          success: false,
+          error: result.Sonuc_Str || 'Kart saklama başarısız'
+        };
+      }
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  // ✅ SAKLI KART LİSTESİ
+  async getSavedCards(cardNumber?: string, userTCKN?: string): Promise<any> {
+    try {
+      const soapRequestData = {
+        G: this.getAuthObject(),
+        Kart_No: cardNumber?.replace(/\s/g, '') || '',
+        KS_KK_Kisi_ID: userTCKN || ''
+      };
+
+      const result = await this.makeSoapRequest('KK_Sakli_Liste', soapRequestData);
+      return result;
+    } catch (error: any) {
+      throw new Error('Kart listesi alınamadı: ' + error.message);
+    }
+  }
+
+  // ✅ SAKLI KART İLE ÖDEME
+  async paymentWithSavedCard(paymentData: {
+    KS_GUID: string;
+    CVV: string;
+    KK_Sahibi_GSM: string;
+    Hata_URL: string;
+    Basarili_URL: string;
+    Siparis_ID: string;
+    Siparis_Aciklama: string;
+    Taksit: string;
+    Islem_Tutar: string;
+    Toplam_Tutar: string;
+    Islem_Guvenlik_Tip: string; // "NS" veya "3D"
+    Islem_ID?: string;
+    IPAdr: string;
+    Ref_URL?: string;
+    Data1?: string;
+    Data2?: string;
+    Data3?: string;
+    Data4?: string;
+    KK_Islem_ID?: string;
+  }): Promise<any> {
+    try {
+      // Hash hesaplama (dokümanda belirtilen formata göre)
+      const hashData = this.clientCode + this.guid + paymentData.Taksit + 
+        paymentData.Islem_Tutar + paymentData.Toplam_Tutar + paymentData.Siparis_ID;
+      
+      const Islem_Hash = await this.generateHash(hashData);
+
+      const soapRequestData = {
+        G: this.getAuthObject(),
+        GUID: this.guid,
+        KS_GUID: paymentData.KS_GUID,
+        CVV: paymentData.CVV,
+        KK_Sahibi_GSM: paymentData.KK_Sahibi_GSM,
+        Hata_URL: paymentData.Hata_URL,
+        Basarili_URL: paymentData.Basarili_URL,
+        Siparis_ID: paymentData.Siparis_ID,
+        Siparis_Aciklama: paymentData.Siparis_Aciklama,
+        Taksit: paymentData.Taksit,
+        Islem_Tutar: paymentData.Islem_Tutar,
+        Toplam_Tutar: paymentData.Toplam_Tutar,
+        Islem_Guvenlik_Tip: paymentData.Islem_Guvenlik_Tip,
+        Islem_Hash: Islem_Hash,
+        Islem_ID: paymentData.Islem_ID || `PAY-${Date.now()}`,
+        IPAdr: paymentData.IPAdr,
+        Ref_URL: paymentData.Ref_URL,
+        Data1: paymentData.Data1,
+        Data2: paymentData.Data2,
+        Data3: paymentData.Data3,
+        Data4: paymentData.Data4,
+        KK_Islem_ID: paymentData.KK_Islem_ID
+      };
+
+      const result = await this.makeSoapRequest('KS_Tahsilat', soapRequestData);
+      return result;
+    } catch (error: any) {
+      throw new Error('Saklı kart ile ödeme başarısız: ' + error.message);
+    }
+  }
+
+  // ✅ DOĞRU HASH HESAPLAMA (Dokümana uygun)
+  private async generateHash(data: string): Promise<string> {
+    // SHA2B64 formatına uygun hash hesaplama
+    const hash = crypto.createHash('sha256').update(data, 'utf8').digest('base64');
+    return hash;
+  }
+
+  // ✅ SAKLI KART SİLME
+  async deleteSavedCard(KS_GUID: string): Promise<boolean> {
+    try {
+      const soapRequestData = {
+        G: this.getAuthObject(),
+        KS_GUID: KS_GUID
+      };
+
+      const result = await this.makeSoapRequest('KS_Kart_Sil', soapRequestData);
+      return result.Sonuc && parseInt(result.Sonuc) > 0;
+    } catch (error: any) {
+      throw new Error('Kart silme başarısız: ' + error.message);
+    }
+  }
+
+
+
 }
 
 // ✅ DOĞRU: Environment-based auth factory
