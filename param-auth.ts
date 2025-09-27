@@ -33,7 +33,7 @@ interface ParamPaymentData {
   Ref_URL: string;
 }
 
-// ✅ DOĞRU: Param Authentication Class - Dokümana Uygun
+// ✅ FIXED: Param Authentication Class
 class ParamAuth {
   private clientCode: string;
   private clientUsername: string;
@@ -48,54 +48,57 @@ class ParamAuth {
     this.clientPassword = config.clientPassword;
     this.terminalNo = config.terminalNo;
     this.guid = config.guid;
-    this.baseUrl = config.baseUrl;
-  }
-
-  // ✅ DOĞRU: Param dokümanındaki hash formatı (Sayfa 7-8)
-  // FIXED: Correct hash generation according to Param documentation
-async generateAuthHash(paymentData: ParamPaymentData): Promise<string> {
-  try {
-    console.log('🔐 Generating Param hash according to documentation...');
-
-    // ✅ DOKÜMANDA BELİRTİLEN SIRALAMA (Sayfa 7):
-    // CLIENT_CODE + GUID + Taksit + Islem_Tutar + Toplam_Tutar + Siparis_ID + Hata_URL + Basarili_URL
     
-    const hashData =
-      this.clientCode +
-      this.guid +
-      paymentData.Taksit +
-      paymentData.Islem_Tutar +
-      paymentData.Toplam_Tutar +
-      paymentData.Siparis_ID +
-      paymentData.Hata_URL +
-      paymentData.Basarili_URL;
-
-    console.log('Hash input:', hashData);
-    console.log('Hash input length:', hashData.length);
-
-    // ✅ DOKÜMANDA BELİRTİLEN HASH METODU: SHA256 + Base64
-    const hash = crypto.createHash('sha256').update(hashData, 'utf8').digest('base64');
-
-    console.log('✅ Generated SHA256+Base64 hash:', hash);
-    return hash;
-
-  } catch (error: any) {
-    console.error('❌ Hash generation error:', error.message);
-    throw new Error('Hash oluşturulamadı: ' + error.message);
+    // ✅ FIX: Remove any WSDL parameters from base URL
+    this.baseUrl = config.baseUrl.replace(/\?WSDL$/i, '').replace(/\?wsdl$/i, '');
+    console.log('✅ Base URL configured:', this.baseUrl);
   }
-}
 
-  // ✅ DOĞRU: SOAP isteği için format (Doküman Sayfa 9)
-  // Update the makeSoapRequest method to try Param-specific formats
+  // ✅ FIXED: Correct hash calculation according to Param documentation
+  async generateAuthHash(paymentData: ParamPaymentData): Promise<string> {
+    try {
+      console.log('🔐 Generating Param hash according to documentation...');
+
+      // ✅ DOKÜMANDA BELİRTİLEN SIRALAMA (Sayfa 7):
+      // CLIENT_CODE + GUID + Taksit + Islem_Tutar + Toplam_Tutar + Siparis_ID + Hata_URL + Basarili_URL
+      
+      const hashData =
+        this.clientCode +
+        this.guid +
+        paymentData.Taksit +
+        paymentData.Islem_Tutar.replace(',', '.') + // Use dot for decimal in hash calculation
+        paymentData.Toplam_Tutar.replace(',', '.') + // Use dot for decimal in hash calculation
+        paymentData.Siparis_ID +
+        paymentData.Hata_URL +
+        paymentData.Basarili_URL;
+
+      console.log('Hash input:', hashData);
+      console.log('Hash input length:', hashData.length);
+
+      // ✅ DOKÜMANDA BELİRTİLEN HASH METODU: SHA256 + Base64
+      const hash = crypto.createHash('sha256').update(hashData, 'utf8').digest('base64');
+
+      console.log('✅ Generated SHA256+Base64 hash:', hash);
+      return hash;
+
+    } catch (error: any) {
+      console.error('❌ Hash generation error:', error.message);
+      throw new Error('Hash oluşturulamadı: ' + error.message);
+    }
+  }
+
+  // ✅ FIXED: SOAP request method with correct SOAP Action
   async makeSoapRequest(action: string, requestData: any): Promise<any> {
     try {
-      console.log(`🔧 Making SOAP request for: ${action}`);
+      console.log(`🔧 Making SOAP request to: ${this.baseUrl}`);
+      console.log(`🔧 Action: ${action}`);
 
-      // Use the exact SOAP Action format from Param documentation
-      const soapAction = `http://tempuri.org/TP_Islem_Odeme`;
+      // ✅ FIX: Use dynamic SOAP Action based on the method being called
+      const soapAction = `http://tempuri.org/${action}`;
+      console.log(`🔧 SOAP Action: ${soapAction}`);
 
       const soapRequest = this.buildSoapEnvelope(action, requestData);
-      console.log('SOAP Request:', soapRequest.substring(0, 500) + '...');
+      console.log('SOAP Request (first 500 chars):', soapRequest.substring(0, 500));
 
       const headers: any = {
         'Content-Type': 'text/xml; charset=utf-8',
@@ -103,44 +106,69 @@ async generateAuthHash(paymentData: ParamPaymentData): Promise<string> {
         'User-Agent': 'ErosAI/1.0'
       };
 
+      console.log('Request headers:', { 
+        'Content-Type': headers['Content-Type'],
+        'SOAPAction': headers['SOAPAction'] 
+      });
+
+      // ✅ FIX: Make sure we're using the correct endpoint
       const response = await axios.post(this.baseUrl, soapRequest, {
         headers: headers,
         timeout: 30000,
         responseType: 'text'
       });
 
-      console.log('✅ SOAP Response received');
+      console.log('✅ SOAP Response received, status:', response.status);
+      console.log('Response data (first 500 chars):', (response.data as string).substring(0, 500));
+      
       return this.parseSoapResponse(response.data as string, action);
-
+      
     } catch (error: any) {
-      console.error('❌ SOAP Request failed:', error.message);
-      if (error.response?.data) {
-        console.error('Response data:', error.response.data);
+      console.error('❌ SOAP Request failed:');
+      console.error('Error message:', error.message);
+      
+      if (error.response) {
+        console.error('Response status:', error.response.status);
+        console.error('Response headers:', error.response.headers);
+        
+        if (error.response.data) {
+          console.error('Response data (first 1000 chars):', 
+            error.response.data.toString().substring(0, 1000));
+        }
       }
-      throw error;
+      
+      if (error.code) {
+        console.error('Error code:', error.code);
+      }
+      
+      throw new Error(`SOAP request failed: ${error.message}`);
     }
   }
 
-  // ✅ DOĞRU: SOAP envelope oluşturma
+  // ✅ FIXED: SOAP envelope building
   private buildSoapEnvelope(action: string, requestData: any): string {
     let requestBody = '';
 
-    // Param expects specific parameter order and structure
-    for (const [key, value] of Object.entries(requestData)) {
-      if (value !== null && value !== undefined) {
-        if (typeof value === 'object') {
-          // Handle nested objects (like G object)
-          requestBody += `<${key}>`;
-          for (const [subKey, subValue] of Object.entries(value)) {
-            if (subValue !== null && subValue !== undefined) {
-              requestBody += `<${subKey}>${this.escapeXml(subValue)}</${subKey}>`;
-            }
-          }
-          requestBody += `</${key}>`;
-        } else {
-          requestBody += `<${key}>${this.escapeXml(value)}</${key}>`;
-        }
+    // Build XML elements in the correct order
+    const buildXmlElement = (key: string, value: any): string => {
+      if (value === null || value === undefined || value === '') {
+        return '';
       }
+      
+      if (typeof value === 'object') {
+        let nestedXml = '';
+        for (const [subKey, subValue] of Object.entries(value)) {
+          nestedXml += buildXmlElement(subKey, subValue);
+        }
+        return nestedXml ? `<${key}>${nestedXml}</${key}>` : '';
+      } else {
+        return `<${key}>${this.escapeXml(value)}</${key}>`;
+      }
+    };
+
+    // Build request body in specific order
+    for (const [key, value] of Object.entries(requestData)) {
+      requestBody += buildXmlElement(key, value);
     }
 
     return `<?xml version="1.0" encoding="utf-8"?>
@@ -155,221 +183,175 @@ async generateAuthHash(paymentData: ParamPaymentData): Promise<string> {
 </soap:Envelope>`;
   }
 
-  // ✅ DOĞRU: SOAP response parsing
+  // ✅ FIXED: SOAP response parsing for Param POS
   private parseSoapResponse(responseData: string, action: string): any {
     try {
-      const resultMatch = responseData.match(/<([a-zA-Z:]+)?Result>(.*?)<\/([a-zA-Z:]+)?Result>/);
-      if (resultMatch && resultMatch[2]) {
-        return resultMatch[2].trim();
+      console.log('Parsing SOAP response...');
+      
+      // Remove namespaces for easier parsing
+      const cleanData = responseData.replace(/xmlns(:[^=]*)?="[^"]*"/g, '');
+      
+      // Try to find the result element specific to Param POS
+      const resultPatterns = [
+        new RegExp(`<${action}Result>(.*?)</${action}Result>`),
+        new RegExp(`<${action}Response>(.*?)</${action}Response>`),
+        /<Result>(.*?)<\/Result>/,
+        /<Sonuc>(.*?)<\/Sonuc>/
+      ];
+
+      for (const pattern of resultPatterns) {
+        const match = cleanData.match(pattern);
+        if (match && match[1]) {
+          console.log('Found result with pattern:', pattern);
+          return this.parseParamResult(match[1]);
+        }
       }
 
-      // Error handling
-      const errorMatch = responseData.match(/<faultstring>(.*?)<\/faultstring>/);
-      if (errorMatch) {
-        throw new Error(`SOAP Error: ${errorMatch[1]}`);
+      // Check for SOAP fault
+      const faultMatch = responseData.match(/<faultstring>(.*?)<\/faultstring>/);
+      if (faultMatch) {
+        throw new Error(`SOAP Fault: ${faultMatch[1]}`);
       }
 
-      throw new Error('Invalid SOAP response format');
+      // If no specific result found, try to parse as XML
+      try {
+        // Simple XML to object conversion for Param responses
+        const result: any = {};
+        const matches = cleanData.match(/<([^>]+)>([^<]*)<\/\1>/g);
+        
+        if (matches) {
+          matches.forEach(match => {
+            const tagMatch = match.match(/<([^>]+)>([^<]*)<\/\1>/);
+            if (tagMatch) {
+              result[tagMatch[1]] = tagMatch[2];
+            }
+          });
+        }
+
+        if (Object.keys(result).length > 0) {
+          return result;
+        }
+      } catch (parseError) {
+        console.log('XML parsing failed, returning raw response');
+      }
+
+      // Return raw response if parsing fails
+      return { rawResponse: responseData };
+      
     } catch (error) {
       console.error('SOAP response parsing error:', error);
       throw error;
     }
   }
 
-  // ✅ DOĞRU: Ödeme işlemi için SOAP isteği (Doküman Sayfa 10)
-  // FIXED: Update processPayment method
-async processPayment(paymentData: ParamPaymentData): Promise<any> {
-  try {
-    const authHash = await this.generateAuthHash(paymentData);
-
-    // ✅ DOĞRU: Param'ın beklediği parametre sırası
-    const soapRequestData = {
-      G: {
-        CLIENT_CODE: this.clientCode,
-        CLIENT_USERNAME: this.clientUsername,
-        CLIENT_PASSWORD: this.clientPassword
-      },
-      Islem_Hash: authHash,
-      SanalPOS_ID: paymentData.SanalPOS_ID,
-      Doviz: paymentData.Doviz,
-      GUID: this.guid, // Use instance guid, not from paymentData
-      KK_Sahibi: paymentData.KK_Sahibi,
-      KK_No: paymentData.KK_No,
-      KK_SK_Ay: paymentData.KK_SK_Ay,
-      KK_SK_Yil: paymentData.KK_SK_Yil,
-      KK_CVC: paymentData.KK_CVC,
-      KK_Sahibi_GSM: paymentData.KK_Sahibi_GSM || '',
-      Hata_URL: paymentData.Hata_URL,
-      Basarili_URL: paymentData.Basarili_URL,
-      Siparis_ID: paymentData.Siparis_ID,
-      Siparis_Aciklama: paymentData.Siparis_Aciklama,
-      Taksit: paymentData.Taksit,
-      Islem_Tutar: paymentData.Islem_Tutar,
-      Toplam_Tutar: paymentData.Toplam_Tutar,
-      Islem_ID: paymentData.Islem_ID,
-      IPAdr: paymentData.IPAdr,
-      Ref_URL: paymentData.Ref_URL
-    };
-
-    console.log('Sending SOAP request data:', JSON.stringify(soapRequestData, null, 2));
-
-    return await this.makeSoapRequest('TP_Islem_Odeme', soapRequestData);
-  } catch (error: any) {
-    console.error('Payment processing error:', error);
-    throw error;
-  }
-}
-
-  // ✅ DOĞRU: İşlem sorgulama (Doküman Sayfa 11)
-  async queryTransaction(transactionId: string): Promise<any> {
-    const queryData = {
-      G: {
-        CLIENT_CODE: this.clientCode,
-        CLIENT_USERNAME: this.clientUsername,
-        CLIENT_PASSWORD: this.clientPassword
-      },
-      GUID: this.guid,
-      Siparis_ID: transactionId,
-      Dekont_ID: transactionId
-    };
-
-    return await this.makeSoapRequest('TP_Islem_Sorgulama', queryData);
+  // ✅ Parse Param-specific result format
+  private parseParamResult(resultXml: string): any {
+    const result: any = {};
+    
+    // Extract common Param POS fields
+    const fields = [
+      'Sonuc', 'Sonuc_Str', 'UCD_URL', 'Islem_ID', 'Siparis_ID', 
+      'Dekont_ID', 'Banka_Sonuc_Kod', 'Redirect_URL'
+    ];
+    
+    fields.forEach(field => {
+      const regex = new RegExp(`<${field}>(.*?)</${field}>`);
+      const match = resultXml.match(regex);
+      if (match) {
+        result[field] = match[1];
+      }
+    });
+    
+    return result;
   }
 
-  // ✅ DOĞRU: BIN sorgulama (Kart bilgileri için)
-  async queryBIN(cardNumber: string): Promise<any> {
-    const binData = {
-      G: {
-        CLIENT_CODE: this.clientCode,
-        CLIENT_USERNAME: this.clientUsername,
-        CLIENT_PASSWORD: this.clientPassword
-      },
-      BIN: cardNumber.substring(0, 6) // İlk 6 hane
-    };
-
-    return await this.makeSoapRequest('BIN_SanalPos', binData);
-  }
-
-  async testHashGeneration(): Promise<string> {
+  // ✅ FIXED: Payment processing
+  async processPayment(paymentData: ParamPaymentData): Promise<any> {
     try {
-      const testData = {
-        Data: 'test'
+      const authHash = await this.generateAuthHash(paymentData);
+
+      // ✅ Param'ın beklediği parametre sırası ve yapısı
+      const soapRequestData = {
+        G: {
+          CLIENT_CODE: this.clientCode,
+          CLIENT_USERNAME: this.clientUsername,
+          CLIENT_PASSWORD: this.clientPassword
+        },
+        Islem_Hash: authHash,
+        SanalPOS_ID: paymentData.SanalPOS_ID,
+        Doviz: paymentData.Doviz,
+        GUID: this.guid, // Use instance GUID
+        KK_Sahibi: paymentData.KK_Sahibi,
+        KK_No: paymentData.KK_No.replace(/\s/g, ''),
+        KK_SK_Ay: paymentData.KK_SK_Ay.padStart(2, '0'),
+        KK_SK_Yil: paymentData.KK_SK_Yil.length === 4 ? 
+                   paymentData.KK_SK_Yil.slice(-2) : paymentData.KK_SK_Yil,
+        KK_CVC: paymentData.KK_CVC,
+        KK_Sahibi_GSM: paymentData.KK_Sahibi_GSM || '',
+        Hata_URL: paymentData.Hata_URL,
+        Basarili_URL: paymentData.Basarili_URL,
+        Siparis_ID: paymentData.Siparis_ID,
+        Siparis_Aciklama: paymentData.Siparis_Aciklama,
+        Taksit: paymentData.Taksit,
+        Islem_Tutar: paymentData.Islem_Tutar, // Keep comma for Param
+        Toplam_Tutar: paymentData.Toplam_Tutar, // Keep comma for Param
+        Islem_ID: paymentData.Islem_ID,
+        IPAdr: paymentData.IPAdr,
+        Ref_URL: paymentData.Ref_URL
       };
 
-      const result = await this.makeSoapRequest('SHA2B64', testData);
-      return result;
-    } catch (error) {
-      console.error('Hash test failed:', error);
+      console.log('Sending SOAP request data:', JSON.stringify(soapRequestData, null, 2));
+
+      return await this.makeSoapRequest('TP_Islem_Odeme', soapRequestData);
+    } catch (error: any) {
+      console.error('Payment processing error:', error);
       throw error;
     }
   }
 
-  // ✅ ADD THIS METHOD TO DISCOVER AVAILABLE METHODS
-  // Replace the discoverAvailableMethods method with this:
-  async discoverAvailableMethods(): Promise<string[]> {
-    try {
-      const response = await axios.get('https://test-dmz.param.com.tr:4443/turkpos.ws/service_turkpos_test.asmx?wsdl', {
-        timeout: 10000
-      });
-
-      const wsdlContent: string = response.data as string;
-      console.log('📋 Raw WSDL content (first 1000 chars):', wsdlContent.substring(0, 1000));
-
-      // Try different patterns to find methods
-      const patterns = [
-        /<operation name="([^"]+)"/g,
-        /<wsdl:operation name="([^"]+)"/g,
-        /<soap:operation soapAction="[^"]*#([^"]+)"/g,
-        /<operation name='([^']+)'/g
-      ];
-
-      let methods: string[] = [];
-      for (const pattern of patterns) {
-        const matches = wsdlContent.match(pattern);
-        if (matches && matches.length > 0) {
-          methods = matches.map(m => {
-            const method = m.replace(/.*name=(["'])([^"']+)\1.*/, '$2');
-            return method;
-          });
-          break;
-        }
-      }
-
-      console.log('📋 Available methods:', methods);
-      return methods;
-    } catch (error) {
-      console.error('Failed to fetch WSDL:', error);
-      return [];
-    }
-  }
-
-  // ✅ ADD THIS ENHANCED CONNECTION TEST METHOD
-  // Update the testConnection method with Param-specific methods
+  // ✅ Test connection method
   async testConnection(): Promise<boolean> {
     try {
-      const methods = await this.discoverAvailableMethods();
-      console.log('🔍 Discovered methods:', methods);
+      console.log('🔧 Testing Param connection...');
+      
+      // Test with SHA2B64 method first (usually available)
+      const testData = {
+        G: this.getAuthObject(),
+        Data: 'test'
+      };
 
-      // Param-specific method names
-      const paramMethods = [
-        'TP_Islem_Odeme',
-        'TP_Islem_Odeme_OnProv',
-        'TP_Islem_Odeme_Prov',
-        'TP_Islem_Sorgulama',
-        'TP_Islem_Iade',
-        'TP_Islem_Iade_OnProv',
-        'TP_Islem_Iade_Prov',
-        'BIN_SanalPos',
-        'SHA2B64',
-        'Islem_Odeme',
-        'Odeme'
-      ];
-
-      const testMethods = [...paramMethods, ...methods];
-
-      for (const method of testMethods) {
-        try {
-          console.log(`🔧 Testing method: ${method}`);
-
-          const testData = {
-            G: this.getAuthObject(),
-            Test: 'test',
-            Data: 'test'
-          };
-
-          const result = await this.makeSoapRequest(method, testData);
-          console.log(`✅ Method ${method} works:`, result);
-          return true;
-        } catch (error) {
-          if (error instanceof Error) {
-            console.log(`❌ Method ${method} failed:`, error.message);
-          } else {
-            console.log(`❌ Method ${method} failed:`, error);
-          }
-          continue;
-        }
-      }
-
-      return false;
+      const result = await this.makeSoapRequest('SHA2B64', testData);
+      console.log('✅ Connection test successful:', result);
+      return true;
+      
     } catch (error) {
-      console.error('Connection test failed:', error);
-      return false;
+      console.log('❌ SHA2B64 test failed, trying BIN_SanalPos...');
+      
+      try {
+        // Try another method
+        const testData = {
+          G: this.getAuthObject(),
+          BIN: '450803' // Test BIN number
+        };
+
+        const result = await this.makeSoapRequest('BIN_SanalPos', testData);
+        console.log('✅ BIN_SanalPos test successful');
+        return true;
+      } catch (error2) {
+        console.error('❌ All connection tests failed');
+        return false;
+      }
     }
   }
 
-  // ✅ DOĞRU: XML escape helper
-  // ✅ FIXED CODE
+  // ✅ XML escape helper
   private escapeXml(unsafe: any): string {
     try {
-      // Handle null/undefined
       if (unsafe === null || unsafe === undefined) {
         return '';
       }
 
-      // Convert to string
       const stringValue = String(unsafe);
-
-      // Escape XML special characters
       return stringValue
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
@@ -378,11 +360,11 @@ async processPayment(paymentData: ParamPaymentData): Promise<any> {
         .replace(/"/g, '&quot;');
     } catch (error) {
       console.error('XML escape error:', error);
-      return ''; // Return empty string on error
+      return '';
     }
   }
 
-  // ✅ DOĞRU: Get authentication object
+  // ✅ Get authentication object
   getAuthObject() {
     return {
       CLIENT_CODE: this.clientCode,
@@ -403,6 +385,7 @@ async processPayment(paymentData: ParamPaymentData): Promise<any> {
   }
 
   // ✅ KART SAKLAMA METODU
+ // ✅ KART SAKLAMA METODU
   async saveCreditCard(cardData: {
     KK_Sahibi: string;
     KK_No: string;
@@ -425,7 +408,6 @@ async processPayment(paymentData: ParamPaymentData): Promise<any> {
 
       const result = await this.makeSoapRequest('KK_Saklama', soapRequestData);
 
-      // Response parsing
       if (result && result.Sonuc && parseInt(result.Sonuc) > 0) {
         return {
           success: true,
@@ -576,7 +558,17 @@ export function createParamAuth(): ParamAuth {
       process.env.PARAM_PROD_BASE_URL
   };
 
-  // ✅ Validation
+  // ✅ FIX: Remove WSDL from base URL
+  if (config.baseUrl) {
+    config.baseUrl = config.baseUrl.replace(/\?WSDL$/i, '').replace(/\?wsdl$/i, '');
+  }
+
+  console.log('Param Auth Configuration:', {
+    clientCode: config.clientCode ? 'SET' : 'MISSING',
+    clientUsername: config.clientUsername ? 'SET' : 'MISSING',
+    baseUrl: config.baseUrl
+  });
+
   const missingVars = Object.entries(config)
     .filter(([key, value]) => !value)
     .map(([key]) => key);
