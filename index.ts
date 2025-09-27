@@ -630,55 +630,62 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
     const paramAuth = createParamAuth();
     const amount = getParamPrice(subscriptionType);
 
-    // ✅ DOĞRU: Payment data with correct structure
+    // ✅ Prepare payment data for 3D Secure
     const paymentData: ParamPaymentData = {
       SanalPOS_ID: process.env.PARAM_SANAL_POS_ID || '10738',
       Doviz: 'TRY',
-      GUID: process.env.PARAM_GUID!, // This will be overridden by paramAuth
+      GUID: process.env.PARAM_GUID!,
       KK_Sahibi: cardHolderName.trim(),
       KK_No: cardNumber.replace(/\s/g, ''),
       KK_SK_Ay: cardExpMonth.padStart(2, '0'),
       KK_SK_Yil: cardExpYear.length === 4 ? cardExpYear.slice(-2) : cardExpYear,
       KK_CVC: cardCVC,
-      KK_Sahibi_GSM: cardHolderPhone?.replace(/\D/g, '') || '5551234567',
+      KK_Sahibi_GSM: cardHolderPhone?.replace(/\D/g, '') || '5555555555',
       Hata_URL: `${process.env.FRONTEND_URL || 'https://www.erosaidating.com'}/payment-error`,
       Basarili_URL: `${process.env.FRONTEND_URL || 'https://www.erosaidating.com'}/payment-success`,
       Siparis_ID: `TRX${Date.now()}${Math.random().toString(36).substr(2, 6)}`,
       Siparis_Aciklama: `ErosAI ${getSubscriptionDisplayName(subscriptionType)}`,
       Taksit: installment,
-      Islem_Tutar: amount.toFixed(2).replace('.', ','), // Param expects comma for decimals
-      Toplam_Tutar: amount.toFixed(2).replace('.', ','), // Param expects comma for decimals
+      Islem_Tutar: amount.toFixed(2).replace('.', ','),
+      Toplam_Tutar: amount.toFixed(2).replace('.', ','),
       Islem_ID: `ISL${Date.now()}`,
       IPAdr: req.ip || req.connection.remoteAddress || '192.168.1.1',
-      Ref_URL: process.env.FRONTEND_URL || 'https://www.erosaidating.com'
+      Ref_URL: process.env.FRONTEND_URL || 'https://www.erosaidating.com',
+      Data1: userEmail || '' // Add email as Data1
     };
 
-    console.log('Payment data prepared:', paymentData);
+    console.log('💳 Starting 3D Secure payment process...');
 
-    // ✅ DOĞRU: SOAP isteği gönder
-    const result = await paramAuth.processPayment(paymentData);
+    // ✅ Use the new TP_WMD_UCD method
+    const result = await paramAuth.processPaymentWith3DS(paymentData);
 
-    console.log('Param API response:', result);
+    console.log('🔔 Param 3D Secure response:', result);
 
-    // ✅ DOĞRU: Response handling
+    // ✅ Handle 3D Secure response
     if (result && (result.Sonuc === '1' || result.Sonuc === 1)) {
-      // Başarılı
+      // This will return a URL for 3D Secure authentication
       res.json({
         success: true,
-        paymentUrl: result.UCD_URL || result.Redirect_URL,
+        requires3DS: true,
+        redirectUrl: result.UCD_URL || result.Redirect_URL || result.Payment_URL,
         transactionId: paymentData.Siparis_ID,
-        message: 'Ödeme başlatıldı'
+        message: '3D Secure ödeme başlatıldı - Yönlendiriliyorsunuz...',
+        threeDSData: result // Include full response for debugging
       });
     } else {
-      // Hata
+      // Handle error response
+      const errorMessage = result?.Sonuc_Str || result?.Sonuc_Aciklama || result?.Error_Message || 'Ödeme başlatılamadı';
+      console.error('❌ Payment initiation failed:', errorMessage);
+      
       res.status(400).json({
         success: false,
-        error: result.Sonuc_Str || result.Sonuc_Aciklama || 'Ödeme başlatılamadı'
+        error: errorMessage,
+        details: result
       });
     }
 
   } catch (error: any) {
-    console.error('Param payment error:', error);
+    console.error('💥 Param 3D payment error:', error);
     
     // More detailed error logging
     if (error.response) {
@@ -687,8 +694,107 @@ app.post('/api/param/create-payment', authMiddleware, async (req: CustomRequest,
     }
     
     res.status(500).json({ 
-      error: 'Ödeme işlemi başarısız',
+      error: '3D ödeme işlemi başarısız',
+      details: error.message,
+      step: 'payment_initiation'
+    });
+  }
+});
+
+app.post('/api/param/complete-3d-payment', authMiddleware, async (req: CustomRequest, res: Response) => {
+  try {
+    const { md, islemGUID, orderId } = req.body;
+
+    console.log('🔐 3D Payment completion request:', { md, islemGUID, orderId });
+
+    if (!md || !islemGUID || !orderId) {
+      return res.status(400).json({ 
+        error: 'Eksik 3D ödeme parametreleri: md, islemGUID ve orderId gereklidir' 
+      });
+    }
+
+    const paramAuth = createParamAuth();
+    const result = await paramAuth.complete3DPayment(md, islemGUID, orderId);
+
+    console.log('✅ 3D Payment completion result:', result);
+
+    if (result && (result.Sonuc === '1' || result.Sonuc === 1)) {
+      // Payment completed successfully
+      res.json({
+        success: true,
+        transactionId: result.Islem_ID || orderId,
+        message: '3D ödeme başarıyla tamamlandı',
+        result: result
+      });
+    } else {
+      const errorMessage = result?.Sonuc_Str || result?.Sonuc_Aciklama || '3D ödeme tamamlanamadı';
+      console.error('❌ 3D payment completion failed:', errorMessage);
+      
+      res.status(400).json({
+        success: false,
+        error: errorMessage,
+        result: result
+      });
+    }
+
+  } catch (error: any) {
+    console.error('💥 3D payment completion error:', error);
+    res.status(500).json({ 
+      error: '3D ödeme tamamlama başarısız',
       details: error.message 
+    });
+  }
+});
+
+app.post('/api/param/test-3ds-method', authMiddleware, async (req: CustomRequest, res: Response) => {
+  try {
+    const paramAuth = createParamAuth();
+
+    // Test data matching Param's example - use object spread for additional properties
+    const testPaymentData: ParamPaymentData = {
+      SanalPOS_ID: '10738',
+      Doviz: 'TRY',
+      GUID: process.env.PARAM_GUID || '0c13d406-873b-403b-9c09-a5766840d98c',
+      KK_Sahibi: 'Test Kullanici',
+      KK_No: '4508034508034509',
+      KK_SK_Ay: '12',
+      KK_SK_Yil: '26',
+      KK_CVC: '000',
+      KK_Sahibi_GSM: '5555555555',
+      Hata_URL: 'https://webhook.site/test-error',
+      Basarili_URL: 'https://webhook.site/test-success',
+      Siparis_ID: 'TEST_' + Date.now(),
+      Siparis_Aciklama: 'Test 3D Ödeme',
+      Taksit: '1',
+      Islem_Tutar: '1,00',
+      Toplam_Tutar: '1,00',
+      Islem_ID: 'TEST_' + Date.now(),
+      IPAdr: '127.0.0.1',
+      Ref_URL: 'https://www.erosaidating.com',
+      Data1: 'test@example.com', // Now this will work
+      Data2: '',
+      Data3: '',
+      Data4: '',
+      Data5: '',
+      Islem_Guvenlik_Tip: '3D'
+    };
+
+    console.log('🧪 Testing TP_WMD_UCD method...');
+    const result = await paramAuth.processPaymentWith3DS(testPaymentData);
+
+    res.json({
+      test: '3DS Method Test',
+      success: true,
+      result: result,
+      message: '3D Secure method test completed'
+    });
+
+  } catch (error: any) {
+    console.error('3DS method test error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      test: '3DS Method Test Failed'
     });
   }
 });
