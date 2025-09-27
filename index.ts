@@ -812,6 +812,38 @@ app.post('/api/param/test-payment', authMiddleware, async (req: CustomRequest, r
   }
 });
 
+// Add this to your index.ts
+app.get('/api/param/test-new-endpoint', async (req: Request, res: Response) => {
+  try {
+    const testUrl = 'https://testposws.param.com.tr/turkpos.ws/service_turkpos_prod.asmx';
+    
+    console.log('Testing new endpoint:', testUrl);
+    
+    const response = await axios.get(testUrl, {
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'ErosAI/1.0'
+      }
+    });
+    
+    res.json({
+      success: true,
+      status: response.status,
+      statusText: response.statusText,
+      canConnect: true,
+      endpoint: testUrl
+    });
+    
+  } catch (error: any) {
+    res.json({
+      success: false,
+      error: error.message,
+      endpoint: 'https://testposws.param.com.tr/turkpos.ws/service_turkpos_prod.asmx',
+      canConnect: false
+    });
+  }
+});
+
 app.get('/api/param/test-hash', async (req: Request, res: Response) => {
   try {
     console.log('🔐 Testing Param hash generation...');
