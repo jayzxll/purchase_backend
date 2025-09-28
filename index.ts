@@ -1085,6 +1085,368 @@ app.get('/api/param/test-connection', async (req: Request, res: Response) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+app.post('/api/param/test-new-3ds-method', authMiddleware, async (req: CustomRequest, res: Response) => {
+  try {
+    const paramAuth = createParamAuth();
+
+    // Test data matching Param's example exactly
+    const testPaymentData: ParamPaymentData = {
+      SanalPOS_ID: '10738',
+      Doviz: 'TRY',
+      GUID: process.env.PARAM_GUID || '0c13d406-873b-403b-9c09-a5766840d98c',
+      KK_Sahibi: 'paramtest paramtest',
+      KK_No: '5571135571135575',
+      KK_SK_Ay: '12',
+      KK_SK_Yil: '2026',
+      KK_CVC: '000',
+      KK_Sahibi_GSM: '5555555555',
+      Hata_URL: 'https://webhook.site/397b86f9-56ad-4553-83c0-17171a3c4c70',
+      Basarili_URL: 'https://webhook.site/397b86f9-56ad-4553-83c0-17171a3c4c70',
+      Siparis_ID: `LEX_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+      Siparis_Aciklama: 'testaciklamaAlper',
+      Taksit: '1',
+      Islem_Tutar: '1,00',
+      Toplam_Tutar: '1,00',
+      Islem_ID: `TEST_${Date.now()}`,
+      IPAdr: '127.0.0.1',
+      Ref_URL: 'https://dev.param.com.tr/tr',
+      Data1: 'engintest@gmail.com',
+      Islem_Guvenlik_Tip: '3D'
+    };
+
+    console.log('🧪 Testing new TP_WMD_UCD method with exact Param example data...');
+    const result = await paramAuth.processPaymentWith3DS(testPaymentData);
+
+    res.json({
+      test: 'New 3DS Method Test',
+      success: true,
+      result: result,
+      message: 'New 3D Secure method test completed',
+      nextStep: result.UCD_URL ? 'Redirect user to 3D Secure page' : 'Check response for errors'
+    });
+
+  } catch (error: any) {
+    console.error('New 3DS method test error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      test: 'New 3DS Method Test Failed'
+    });
+  }
+});
+
+app.post('/api/param/create-3ds-payment', authMiddleware, async (req: CustomRequest, res: Response) => {
+  try {
+    const {
+      subscriptionType,
+      userEmail,
+      userName,
+      cardHolderName,
+      cardNumber,
+      cardExpMonth,
+      cardExpYear,
+      cardCVC,
+      cardHolderPhone,
+      installment = '1'
+    } = req.body;
+
+    // Validation
+    const validation = validateParamPaymentRequest(req.body);
+    if (!validation.isValid) {
+      return res.status(400).json({ error: validation.error });
+    }
+
+    const paramAuth = createParamAuth();
+    const amount = getParamPrice(subscriptionType);
+
+    // ✅ Prepare payment data for new 3D Secure method
+    const paymentData: ParamPaymentData = {
+      SanalPOS_ID: process.env.PARAM_SANAL_POS_ID || '10738',
+      Doviz: 'TRY',
+      GUID: process.env.PARAM_GUID!,
+      KK_Sahibi: cardHolderName.trim(),
+      KK_No: cardNumber.replace(/\s/g, ''),
+      KK_SK_Ay: cardExpMonth.padStart(2, '0'),
+      KK_SK_Yil: cardExpYear.length === 4 ? cardExpYear.slice(-2) : cardExpYear,
+      KK_CVC: cardCVC,
+      KK_Sahibi_GSM: cardHolderPhone?.replace(/\D/g, '') || '5555555555',
+      Hata_URL: `${process.env.FRONTEND_URL || 'https://www.erosaidating.com'}/payment/3ds-error`,
+      Basarili_URL: `${process.env.FRONTEND_URL || 'https://www.erosaidating.com'}/payment/3ds-success`,
+      Siparis_ID: `TRX${Date.now()}${Math.random().toString(36).substr(2, 6)}`,
+      Siparis_Aciklama: `ErosAI ${getSubscriptionDisplayName(subscriptionType)} - 3D Secure`,
+      Taksit: installment,
+      Islem_Tutar: amount.toFixed(2).replace('.', ','),
+      Toplam_Tutar: amount.toFixed(2).replace('.', ','),
+      Islem_ID: `ISL${Date.now()}`,
+      IPAdr: req.ip || req.connection.remoteAddress || '192.168.1.1',
+      Ref_URL: process.env.FRONTEND_URL || 'https://www.erosaidating.com',
+      Data1: userEmail || '',
+      Islem_Guvenlik_Tip: '3D' // Force 3D Secure
+    };
+
+    console.log('💳 Starting new 3D Secure payment process with TP_WMD_UCD...');
+
+    // ✅ Use the new TP_WMD_UCD method
+    const result = await paramAuth.processPaymentWith3DS(paymentData);
+
+    console.log('🔔 New 3D Secure response:', result);
+
+    // ✅ Handle 3D Secure response
+    if (result && (result.Sonuc === '1' || result.Sonuc === 1)) {
+      // Save initial payment record
+      if (admin.apps.length > 0) {
+        await admin.firestore().collection('param_3ds_payments').doc(paymentData.Siparis_ID).set({
+          user_id: req.user?.uid,
+          user_email: userEmail,
+          subscription_type: subscriptionType,
+          amount: amount,
+          currency: 'TRY',
+          status: '3ds_initiated',
+          payment_data: paymentData,
+          param_response: result,
+          created_at: new Date(),
+          islem_guid: result.Islem_GUID
+        });
+      }
+
+      // Return the 3D Secure URL to redirect user
+      res.json({
+        success: true,
+        requires3DS: true,
+        redirectUrl: result.UCD_URL || result.Redirect_URL,
+        transactionId: paymentData.Siparis_ID,
+        islemGUID: result.Islem_GUID,
+        message: '3D Secure ödeme başlatıldı - Yönlendiriliyorsunuz...',
+        threeDSData: result
+      });
+    } else {
+      const errorMessage = result?.Sonuc_Str || result?.Sonuc_Aciklama || '3D ödeme başlatılamadı';
+      console.error('❌ 3D payment initiation failed:', errorMessage);
+      
+      res.status(400).json({
+        success: false,
+        error: errorMessage,
+        details: result
+      });
+    }
+
+  } catch (error: any) {
+    console.error('💥 New 3D payment error:', error);
+    
+    res.status(500).json({ 
+      error: '3D ödeme işlemi başarısız',
+      details: error.message,
+      step: '3ds_payment_initiation'
+    });
+  }
+});
+
+app.post('/api/param/complete-3ds-payment', authMiddleware, async (req: CustomRequest, res: Response) => {
+  try {
+    const { md, islemGUID, orderId } = req.body;
+
+    console.log('🔐 3D Payment completion request:', { md, islemGUID, orderId });
+
+    if (!md || !islemGUID || !orderId) {
+      return res.status(400).json({ 
+        error: 'Eksik 3D ödeme parametreleri: md, islemGUID ve orderId gereklidir' 
+      });
+    }
+
+    const paramAuth = createParamAuth();
+    const result = await paramAuth.complete3DPayment(md, islemGUID, orderId);
+
+    console.log('✅ 3D Payment completion result:', result);
+
+    if (result && (result.Sonuc === '1' || result.Sonuc === 1)) {
+      // Payment completed successfully
+      
+      // Get payment details
+      const paymentDoc = await admin.firestore().collection('param_3ds_payments').doc(orderId).get();
+      const paymentData = paymentDoc.data();
+
+      if (paymentData) {
+        const userId = paymentData.user_id;
+        const subscriptionType = paymentData.subscription_type;
+        const userEmail = paymentData.user_email;
+
+        // Calculate expiry date
+        const purchaseDate = new Date();
+        const expiryDate = calculateExpiryDate(subscriptionType);
+
+        // Update user subscription
+        await admin.firestore().collection('users').doc(userId).set({
+          subscription: {
+            type: subscriptionType,
+            purchase_date: purchaseDate,
+            expiry_date: expiryDate,
+            purchase_token: orderId,
+            product_id: `param_${subscriptionType}`,
+            platform: 'param',
+            status: 'active',
+            last_updated: new Date(),
+          },
+          accountPlan: subscriptionType,
+          expirationDate: expiryDate.toISOString(),
+          last_updated: new Date(),
+        }, { merge: true });
+
+        // Create subscription record
+        await admin.firestore().collection('subscriptions').doc(orderId).set({
+          user_id: userId,
+          user_email: userEmail,
+          type: subscriptionType,
+          purchase_date: purchaseDate,
+          expiry_date: expiryDate,
+          purchase_token: orderId,
+          product_id: `param_${subscriptionType}`,
+          platform: 'param',
+          status: 'active',
+          amount: paymentData.amount,
+          currency: 'TRY',
+          last_updated: new Date(),
+        });
+
+        // Update payment record
+        await admin.firestore().collection('param_3ds_payments').doc(orderId).update({
+          status: 'completed',
+          completed_at: new Date(),
+          param_final_response: result
+        });
+      }
+
+      res.json({
+        success: true,
+        transactionId: result.Islem_ID || orderId,
+        message: '3D ödeme başarıyla tamamlandı',
+        result: result
+      });
+    } else {
+      const errorMessage = result?.Sonuc_Str || result?.Sonuc_Aciklama || '3D ödeme tamamlanamadı';
+      console.error('❌ 3D payment completion failed:', errorMessage);
+      
+      // Update payment record with failure
+      await admin.firestore().collection('param_3ds_payments').doc(orderId).update({
+        status: 'failed',
+        failed_at: new Date(),
+        error_message: errorMessage
+      });
+
+      res.status(400).json({
+        success: false,
+        error: errorMessage,
+        result: result
+      });
+    }
+
+  } catch (error: any) {
+    console.error('💥 3D payment completion error:', error);
+    
+    // Update payment record with error
+    try {
+      await admin.firestore().collection('param_3ds_payments').doc(req.body.orderId).update({
+        status: 'error',
+        error_at: new Date(),
+        error_message: error.message
+      });
+    } catch (updateError) {
+      console.error('Failed to update payment record:', updateError);
+    }
+    
+    res.status(500).json({ 
+      error: '3D ödeme tamamlama başarısız',
+      details: error.message 
+    });
+  }
+});
+
+app.get('/api/param/3ds-success', async (req: Request, res: Response) => {
+  try {
+    const { md, islemGUID, orderId } = req.query;
+
+    console.log('3D Secure Success Callback:', { md, islemGUID, orderId });
+
+    if (!md || !islemGUID || !orderId) {
+      return res.redirect(`${process.env.FRONTEND_URL || 'https://www.erosaidating.com'}/payment/3ds-error?message=Missing parameters`);
+    }
+
+    // Update payment record
+    if (admin.apps.length > 0) {
+      await admin.firestore().collection('param_3ds_payments').doc(orderId as string).update({
+        '3ds_callback_received': true,
+        '3ds_callback_at': new Date(),
+        'md_received': md,
+        'islem_guid_received': islemGUID
+      });
+    }
+
+    // Redirect to Flutter app with parameters
+    const redirectUrl = `${process.env.FRONTEND_URL || 'https://www.erosaidating.com'}/payment/3ds-complete?md=${md}&islemGUID=${islemGUID}&orderId=${orderId}`;
+    res.redirect(redirectUrl);
+
+  } catch (error: any) {
+    console.error('3DS Success callback error:', error);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://www.erosaidating.com'}/payment/3ds-error?message=Callback failed`);
+  }
+});
+
+app.get('/api/param/3ds-error', async (req: Request, res: Response) => {
+  try {
+    const { orderId, error } = req.query;
+
+    console.log('3D Secure Error Callback:', { orderId, error });
+
+    if (orderId && admin.apps.length > 0) {
+      await admin.firestore().collection('param_3ds_payments').doc(orderId as string).update({
+        status: '3ds_failed',
+        '3ds_error_at': new Date(),
+        '3ds_error_message': error
+      });
+    }
+
+    res.redirect(`${process.env.FRONTEND_URL || 'https://www.erosaidating.com'}/payment/3ds-error?orderId=${orderId}&error=${encodeURIComponent(error as string)}`);
+
+  } catch (error: any) {
+    console.error('3DS Error callback error:', error);
+    res.redirect(`${process.env.FRONTEND_URL || 'https://www.erosaidating.com'}/payment/3ds-error`);
+  }
+});
+
+// ✅ NEW: Test new endpoint connectivity
+app.get('/api/param/test-new-endpoint', async (req: Request, res: Response) => {
+  try {
+    const testUrl = 'https://testposws.param.com.tr/turkpos.ws/service_turkpos_prod.asmx';
+    
+    console.log('Testing new endpoint:', testUrl);
+    
+    const response = await axios.get(testUrl, {
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'ErosAI/1.0'
+      }
+    });
+    
+    res.json({
+      success: true,
+      status: response.status,
+      statusText: response.statusText,
+      canConnect: true,
+      endpoint: testUrl,
+      message: 'New endpoint is accessible'
+    });
+    
+  } catch (error: any) {
+    res.json({
+      success: false,
+      error: error.message,
+      endpoint: 'https://testposws.param.com.tr/turkpos.ws/service_turkpos_prod.asmx',
+      canConnect: false,
+      message: 'New endpoint is not accessible'
+    });
+  }
+});
+
 // Add this to your index.ts
 app.get('/api/test-param-soap', async (req: Request, res: Response) => {
   try {
