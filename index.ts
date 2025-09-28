@@ -2556,6 +2556,71 @@ app.post('/api/param/recurring-payment', authMiddleware, async (req: CustomReque
   }
 });
 
+// ✅ IP Detection Endpoint
+app.get('/api/debug/ip', async (req: Request, res: Response) => {
+  try {
+    // Get Railway's external IP by making outbound request
+    const ipServices = [
+      'https://api.ipify.org?format=json',
+      'https://ipinfo.io/json',
+      'https://httpbin.org/ip',
+      'https://checkip.amazonaws.com/'
+    ];
+
+    let railwayIp = 'Unknown';
+    
+    for (const service of ipServices) {
+      try {
+        const response = await axios.get(service, { timeout: 5000 });
+        const data = response.data;
+        
+        if (service.includes('ipify')) {
+          railwayIp = (data as { ip: string }).ip;
+        } else if (service.includes('ipinfo')) {
+          railwayIp = (data as { ip: string }).ip;
+        } else if (service.includes('httpbin')) {
+          railwayIp = (data as { origin: string }).origin;
+        } else if (service.includes('amazonaws')) {
+          railwayIp = (typeof data === 'string' ? data : String(data)).trim();
+        }
+        
+        if (railwayIp && railwayIp !== 'Unknown') {
+          break;
+        }
+      } catch (error) {
+        if (error && typeof error === 'object' && 'message' in error) {
+          console.log(`Failed to get IP from ${service}:`, (error as any).message);
+        } else {
+          console.log(`Failed to get IP from ${service}:`, error);
+        }
+        continue;
+      }
+    }
+
+    // Also get request IP (useful for testing)
+    const requestIp = req.ip || 
+                     req.connection.remoteAddress || 
+                     req.socket.remoteAddress ||
+                     (req.headers['x-forwarded-for'] as string)?.split(',')[0] ||
+                     'Unknown';
+
+    res.json({
+      railwayServerIp: railwayIp,
+      yourRequestIp: requestIp,
+      headers: {
+        'x-forwarded-for': req.headers['x-forwarded-for'],
+        'x-real-ip': req.headers['x-real-ip'],
+        'x-vercel-forwarded-for': req.headers['x-vercel-forwarded-for'],
+      },
+      timestamp: new Date().toISOString(),
+      note: 'Provide the railwayServerIp to Param for IP whitelisting'
+    });
+
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ✅ YARDIMCI FONKSİYONLAR
 function validateCardDetails(cardData: any): { isValid: boolean; error?: string } {
   const { cardHolderName, cardNumber, cardExpMonth, cardExpYear } = cardData;
