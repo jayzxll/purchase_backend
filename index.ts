@@ -2662,24 +2662,33 @@ app.get('/api/debug/my-ip', async (req: Request, res: Response) => {
       'https://checkip.amazonaws.com/'
     ];
 
-    let railwayIp = null;
-    let successService = null;
+    let railwayIp: string | null = null;
+    let successService: string | null = null;
 
     for (const service of services) {
       try {
         console.log(`Trying to get IP from: ${service}`);
         
+        const response = await axios.get(service, { timeout: 5000 });
+        
         if (service.includes('amazonaws')) {
-          const response = await axios.get(service, { timeout: 5000 });
-          railwayIp = response.data.trim();
-        } else {
-          const response = await axios.get(service, { timeout: 5000 });
-          railwayIp = response.data.ip;
+          // AWS service returns plain text
+          railwayIp = String(response.data).trim();
+        } else if (service.includes('ipify')) {
+          // ipify returns JSON with 'ip' property
+          const data = response.data as { ip?: string };
+          railwayIp = data.ip || null;
+        } else if (service.includes('ipinfo')) {
+          // ipinfo returns JSON with 'ip' property
+          const data = response.data as { ip?: string };
+          railwayIp = data.ip || null;
         }
         
-        successService = service;
-        console.log(`✅ Got Railway IP: ${railwayIp}`);
-        break;
+        if (railwayIp) {
+          successService = service;
+          console.log(`✅ Got Railway IP: ${railwayIp}`);
+          break;
+        }
       } catch (error: any) {
         console.log(`Failed with ${service}: ${error.message}`);
         continue;
@@ -2700,22 +2709,23 @@ app.get('/api/debug/my-ip', async (req: Request, res: Response) => {
       instructions: [
         '1. Copy the railwayOutboundIp value above',
         '2. Contact Param support and request IP whitelisting',
-        '3. Provide them with this IP address and your merchant code',
+        '3. Provide them with this IP address and your merchant code (10738 for test)',
         '4. Wait for confirmation that IP is whitelisted',
         '5. Then retry your payment'
       ]
     });
 
   } catch (error: any) {
+    console.error('IP detection error:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
 
-// Also add this to get request IP (backup method)
+// Also add this backup endpoint
 app.get('/api/debug/request-ip', (req: Request, res: Response) => {
   const ip = req.ip || 
-             req.connection.remoteAddress || 
-             req.socket.remoteAddress ||
+             (req.connection.remoteAddress as string) || 
+             (req.socket.remoteAddress as string) ||
              'unknown';
 
   res.json({
@@ -2725,7 +2735,7 @@ app.get('/api/debug/request-ip', (req: Request, res: Response) => {
       'x-real-ip': req.headers['x-real-ip'],
       'cf-connecting-ip': req.headers['cf-connecting-ip']
     },
-    note: 'This is the IP that requests appear to come from to your server (not the outbound IP to Param)'
+    note: 'This is the IP seen by your server (backup if /my-ip fails)'
   });
 });
 
