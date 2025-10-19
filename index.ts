@@ -2653,6 +2653,82 @@ app.get('/api/debug/param-full-check', (req: Request, res: Response) => {
   }
 });
 
+app.get('/api/debug/my-ip', async (req: Request, res: Response) => {
+  try {
+    // Multiple services to ensure we get the IP
+    const services = [
+      'https://api.ipify.org?format=json',
+      'https://ipinfo.io/json',
+      'https://checkip.amazonaws.com/'
+    ];
+
+    let railwayIp = null;
+    let successService = null;
+
+    for (const service of services) {
+      try {
+        console.log(`Trying to get IP from: ${service}`);
+        
+        if (service.includes('amazonaws')) {
+          const response = await axios.get(service, { timeout: 5000 });
+          railwayIp = response.data.trim();
+        } else {
+          const response = await axios.get(service, { timeout: 5000 });
+          railwayIp = response.data.ip;
+        }
+        
+        successService = service;
+        console.log(`✅ Got Railway IP: ${railwayIp}`);
+        break;
+      } catch (error: any) {
+        console.log(`Failed with ${service}: ${error.message}`);
+        continue;
+      }
+    }
+
+    if (!railwayIp) {
+      return res.status(500).json({ 
+        error: 'Could not determine Railway IP',
+        note: 'All external IP services failed'
+      });
+    }
+
+    res.json({
+      railwayOutboundIp: railwayIp,
+      source: successService,
+      timestamp: new Date().toISOString(),
+      instructions: [
+        '1. Copy the railwayOutboundIp value above',
+        '2. Contact Param support and request IP whitelisting',
+        '3. Provide them with this IP address and your merchant code',
+        '4. Wait for confirmation that IP is whitelisted',
+        '5. Then retry your payment'
+      ]
+    });
+
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Also add this to get request IP (backup method)
+app.get('/api/debug/request-ip', (req: Request, res: Response) => {
+  const ip = req.ip || 
+             req.connection.remoteAddress || 
+             req.socket.remoteAddress ||
+             'unknown';
+
+  res.json({
+    requestIp: ip,
+    headers: {
+      'x-forwarded-for': req.headers['x-forwarded-for'],
+      'x-real-ip': req.headers['x-real-ip'],
+      'cf-connecting-ip': req.headers['cf-connecting-ip']
+    },
+    note: 'This is the IP that requests appear to come from to your server (not the outbound IP to Param)'
+  });
+});
+
 // ✅ YARDIMCI FONKSİYONLAR
 function validateCardDetails(cardData: any): { isValid: boolean; error?: string } {
   const { cardHolderName, cardNumber, cardExpMonth, cardExpYear } = cardData;
