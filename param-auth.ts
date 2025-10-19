@@ -72,7 +72,6 @@ interface PaymentWithSavedCardData {
   Ref_URL: string;
 }
 
-// ✅ UPDATED: Param Authentication Class with new 3D Secure methods
 class ParamAuth {
   private clientCode: string;
   private clientUsername: string;
@@ -88,17 +87,14 @@ class ParamAuth {
     this.terminalNo = config.terminalNo;
     this.guid = config.guid;
     
-    // ✅ FIX: Use the new endpoint from Param support
     this.baseUrl = config.baseUrl.replace(/\?WSDL$/i, '').replace(/\?wsdl$/i, '');
     console.log('✅ Base URL configured:', this.baseUrl);
   }
 
-  // ✅ UPDATED: Hash calculation for new 3D method
   async generateAuthHash(paymentData: ParamPaymentData): Promise<string> {
     try {
       console.log('🔐 Generating Param hash for 3D Secure...');
 
-      // ✅ UPDATED: Hash data according to Param documentation for TP_WMD_UCD
       const hashData =
         this.clientCode +
         this.guid +
@@ -110,9 +106,7 @@ class ParamAuth {
         paymentData.Basarili_URL;
 
       console.log('Hash input:', hashData);
-      console.log('Hash input length:', hashData.length);
 
-      // ✅ SHA256 + Base64
       const hash = crypto.createHash('sha256').update(hashData, 'utf8').digest('base64');
 
       console.log('✅ Generated SHA256+Base64 hash:', hash);
@@ -124,18 +118,16 @@ class ParamAuth {
     }
   }
 
-  // ✅ UPDATED: SOAP request method for new endpoint
+  // ✅ UPDATED: SOAP request method with correct SOAPAction format
   async makeSoapRequest(action: string, requestData: any): Promise<any> {
-    // ✅ UPDATED: SOAP Action formats for new methods
+    // ✅ UPDATED: Correct SOAPAction format for Param test ortamı
     const soapActionFormats = [
+      `https://turkpos.com.tr/${action}`, // Correct format for test ortamı
+      `"https://turkpos.com.tr/${action}"`, // With quotes
       `"${action}"`, // Method name in quotes
-      `${action}`,   // Method name without quotes
-      `"http://tempuri.org/${action}"`, // Full URI in quotes
-      `http://tempuri.org/${action}`, // Full URI without quotes
-      `"${action}"`, // Double quotes
-      `'${action}'`, // Single quotes
-      `urn:${action}`, // URN format
-      ``, // Empty SOAP Action
+      `${action}`, // Method name without quotes
+      `http://tempuri.org/${action}`, // Alternative URI
+      `"http://tempuri.org/${action}"`, // Alternative URI with quotes
     ];
 
     for (const soapAction of soapActionFormats) {
@@ -143,17 +135,12 @@ class ParamAuth {
         console.log(`🔧 Trying SOAP Action: "${soapAction}" for method: ${action}`);
         
         const soapRequest = this.buildSoapEnvelope(action, requestData);
-        console.log('SOAP Request (first 500 chars):', soapRequest.substring(0, 500));
 
         const headers: any = {
           'Content-Type': 'text/xml; charset=utf-8',
-          'User-Agent': 'ErosAI/1.0'
+          'User-Agent': 'ErosAI/1.0',
+          'SOAPAction': soapAction
         };
-
-        // Only add SOAPAction header if it's not empty
-        if (soapAction !== '') {
-          headers['SOAPAction'] = soapAction;
-        }
 
         console.log('Request headers:', headers);
 
@@ -175,11 +162,10 @@ class ParamAuth {
           // Check if this is a SOAP Action error
           if (errorText.includes('did not recognize') || errorText.includes('SOAPAction')) {
             console.log(`❌ SOAP Action rejected: "${soapAction}"`);
-            continue; // Try next format
+            continue;
           }
         }
         
-        // If it's not a SOAP Action error, rethrow
         console.error(`❌ Error with SOAP Action "${soapAction}":`, error.message);
         throw error;
       }
@@ -188,11 +174,9 @@ class ParamAuth {
     throw new Error('All SOAP Action formats failed. Param service might be unavailable.');
   }
 
-  // ✅ UPDATED: SOAP envelope building for new methods
   private buildSoapEnvelope(action: string, requestData: any): string {
     let requestBody = '';
 
-    // Build XML elements in the correct order
     const buildXmlElement = (key: string, value: any): string => {
       if (value === null || value === undefined || value === '') {
         return '';
@@ -209,12 +193,10 @@ class ParamAuth {
       }
     };
 
-    // Build request body in specific order
     for (const [key, value] of Object.entries(requestData)) {
       requestBody += buildXmlElement(key, value);
     }
 
-    // ✅ UPDATED: Use correct namespace for new methods
     return `<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" 
                xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
@@ -227,18 +209,15 @@ class ParamAuth {
 </soap:Envelope>`;
   }
 
-  // ✅ UPDATED: SOAP response parsing for new methods
   private parseSoapResponse(responseData: string, action: string): any {
     try {
       console.log('Parsing SOAP response for method:', action);
       
-      // Check for SOAP fault first
       const faultMatch = responseData.match(/<faultstring[^>]*>(.*?)<\/faultstring>/i);
       if (faultMatch) {
         throw new Error(`SOAP Fault: ${faultMatch[1]}`);
       }
 
-      // Try to extract the response content
       const bodyMatch = responseData.match(/<soap:Body[^>]*>(.*?)<\/soap:Body>/is);
       if (!bodyMatch) {
         throw new Error('No SOAP Body found in response');
@@ -246,7 +225,6 @@ class ParamAuth {
 
       const bodyContent = bodyMatch[1];
       
-      // Try different response patterns for new methods
       const resultPatterns = [
         new RegExp(`<${action}Result[^>]*>(.*?)<\/${action}Result>`, 'is'),
         new RegExp(`<${action}Response[^>]*>(.*?)<\/${action}Response>`, 'is'),
@@ -262,7 +240,6 @@ class ParamAuth {
         }
       }
 
-      // If no specific pattern found, try to parse all XML elements
       const result: any = {};
       const tagMatches = bodyContent.matchAll(/<([^>]+)>([^<]*)<\/\1>/g);
       
@@ -274,7 +251,6 @@ class ParamAuth {
         return result;
       }
 
-      // Return raw response if parsing fails
       return { rawResponse: responseData, bodyContent: bodyContent };
       
     } catch (error) {
@@ -283,11 +259,9 @@ class ParamAuth {
     }
   }
 
-  // ✅ Parse Param-specific result format
   private parseParamResult(resultXml: string): any {
     const result: any = {};
     
-    // Extract common Param POS fields
     const fields = [
       'Sonuc', 'Sonuc_Str', 'UCD_URL', 'Islem_ID', 'Siparis_ID', 
       'Dekont_ID', 'Banka_Sonuc_Kod', 'Redirect_URL', 'Islem_GUID',
@@ -305,12 +279,10 @@ class ParamAuth {
     return result;
   }
 
-  // ✅ NEW: 3D Secure Payment Processing - First Step (TP_WMD_UCD)
   async processPaymentWith3DS(paymentData: ParamPaymentData): Promise<any> {
     try {
       console.log('🔄 Starting 3D Secure payment process...');
 
-      // Generate hash for 3D Secure
       const hashData = this.clientCode + this.guid + paymentData.Taksit +
         paymentData.Islem_Tutar.replace(',', '.') +
         paymentData.Toplam_Tutar.replace(',', '.') +
@@ -322,7 +294,6 @@ class ParamAuth {
 
       console.log('✅ 3D Secure hash generated');
 
-      // Prepare request for TP_WMD_UCD method
       const soapRequestData = {
         G: this.getAuthObject(),
         GUID: this.guid,
@@ -341,7 +312,7 @@ class ParamAuth {
         Islem_Tutar: paymentData.Islem_Tutar,
         Toplam_Tutar: paymentData.Toplam_Tutar,
         Islem_Hash: Islem_Hash,
-        Islem_Guvenlik_Tip: '3D', // Force 3D Secure
+        Islem_Guvenlik_Tip: '3D',
         Islem_ID: paymentData.Islem_ID,
         IPAdr: paymentData.IPAdr,
         Ref_URL: paymentData.Ref_URL,
@@ -365,7 +336,6 @@ class ParamAuth {
     }
   }
 
-  // ✅ NEW: Complete 3D Payment - Second Step (TP_WMD_Pay)
   async complete3DPayment(md: string, islemGUID: string, orderId: string): Promise<any> {
     try {
       console.log('🔄 Completing 3D Secure payment...');
@@ -391,7 +361,6 @@ class ParamAuth {
     }
   }
 
-  // ✅ Get authentication object
   getAuthObject() {
     return {
       CLIENT_CODE: this.clientCode,
@@ -400,7 +369,6 @@ class ParamAuth {
     };
   }
 
-  // ✅ XML escape helper
   private escapeXml(unsafe: any): string {
     try {
       if (unsafe === null || unsafe === undefined) {
@@ -420,11 +388,10 @@ class ParamAuth {
     }
   }
 
-  // ✅ Test connection with new methods
   async testConnection(): Promise<{success: boolean; workingAction?: string; error?: string}> {
     const testMethods = [
-      'SHA2B64',
       'TP_WMD_UCD',
+      'SHA2B64',
       'TP_WMD_Pay'
     ];
 
@@ -436,11 +403,7 @@ class ParamAuth {
           G: this.getAuthObject()
         };
 
-        // Add method-specific test data
-        if (method === 'SHA2B64') {
-          testData.Data = 'test';
-        } else if (method === 'TP_WMD_UCD') {
-          // Minimal test data for TP_WMD_UCD
+        if (method === 'TP_WMD_UCD') {
           testData = {
             G: this.getAuthObject(),
             GUID: this.guid,
@@ -463,6 +426,8 @@ class ParamAuth {
             IPAdr: '127.0.0.1',
             Ref_URL: 'https://test.com'
           };
+        } else if (method === 'SHA2B64') {
+          testData.Data = 'test';
         } else if (method === 'TP_WMD_Pay') {
           testData = {
             G: this.getAuthObject(),
@@ -488,169 +453,155 @@ class ParamAuth {
       error: 'All connection tests failed. Check Param service availability.' 
     };
   }
-/**
- * Save credit card to Param for recurring payments
- */
-async saveCreditCard(cardData: SaveCardData): Promise<SaveCardResult> {
-  try {
-    console.log('💳 Saving credit card to Param...');
 
-    const soapRequestData = {
-      G: this.getAuthObject(),
-      GUID: this.guid,
-      KK_Sahibi: cardData.KK_Sahibi,
-      KK_No: cardData.KK_No.replace(/\s/g, ''),
-      KK_SK_Ay: cardData.KK_SK_Ay.padStart(2, '0'),
-      KK_SK_Yil: cardData.KK_SK_Yil.length === 4 ? 
-                 cardData.KK_SK_Yil.slice(-2) : cardData.KK_SK_Yil,
-      KK_Kart_Adi: cardData.KK_Kart_Adi
-    };
+  async saveCreditCard(cardData: SaveCardData): Promise<SaveCardResult> {
+    try {
+      console.log('💳 Saving credit card to Param...');
 
-    console.log('📤 Sending TP_KK_Sakla request...');
-    const result = await this.makeSoapRequest('TP_KK_Sakla', soapRequestData);
-
-    console.log('📥 TP_KK_Sakla Response:', result);
-
-    if (result && (result.Sonuc === '1' || result.Sonuc === 1)) {
-      return {
-        success: true,
-        KS_GUID: result.KS_GUID,
-        Sonuc: result.Sonuc,
-        Sonuc_Str: result.Sonuc_Str
+      const soapRequestData = {
+        G: this.getAuthObject(),
+        GUID: this.guid,
+        KK_Sahibi: cardData.KK_Sahibi,
+        KK_No: cardData.KK_No.replace(/\s/g, ''),
+        KK_SK_Ay: cardData.KK_SK_Ay.padStart(2, '0'),
+        KK_SK_Yil: cardData.KK_SK_Yil.length === 4 ? 
+                   cardData.KK_SK_Yil.slice(-2) : cardData.KK_SK_Yil,
+        KK_Kart_Adi: cardData.KK_Kart_Adi
       };
-    } else {
-      return {
-        success: false,
-        error: result?.Sonuc_Str || result?.Sonuc_Aciklama || 'Kart kaydedilemedi',
-        Sonuc: result?.Sonuc,
-        Sonuc_Str: result?.Sonuc_Str
-      };
-    }
 
-  } catch (error: any) {
-    console.error('❌ Card saving error:', error);
-    return {
-      success: false,
-      error: 'Kart kaydetme hatası: ' + error.message
-    };
-  }
-}
+      console.log('📤 Sending TP_KK_Sakla request...');
+      const result = await this.makeSoapRequest('TP_KK_Sakla', soapRequestData);
 
-/**
- * Process payment with saved card (recurring payment)
- */
-async paymentWithSavedCard(paymentData: PaymentWithSavedCardData): Promise<any> {
-  try {
-    console.log('💳 Processing payment with saved card...');
+      console.log('📥 TP_KK_Sakla Response:', result);
 
-    // Generate hash for saved card payment
-    const hashData = this.clientCode + this.guid + paymentData.Taksit +
-      paymentData.Islem_Tutar.replace(',', '.') +
-      paymentData.Toplam_Tutar.replace(',', '.') +
-      paymentData.Siparis_ID +
-      paymentData.Hata_URL +
-      paymentData.Basarili_URL;
+      if (result && (result.Sonuc === '1' || result.Sonuc === 1)) {
+        return {
+          success: true,
+          KS_GUID: result.KS_GUID,
+          Sonuc: result.Sonuc,
+          Sonuc_Str: result.Sonuc_Str
+        };
+      } else {
+        return {
+          success: false,
+          error: result?.Sonuc_Str || result?.Sonuc_Aciklama || 'Kart kaydedilemedi',
+          Sonuc: result?.Sonuc,
+          Sonuc_Str: result?.Sonuc_Str
+        };
+      }
 
-    const Islem_Hash = crypto.createHash('sha256').update(hashData, 'utf8').digest('base64');
-
-    console.log('✅ Saved card payment hash generated');
-
-    const soapRequestData = {
-      G: this.getAuthObject(),
-      GUID: this.guid,
-      KS_GUID: paymentData.KS_GUID,
-      KK_CVC: paymentData.CVV,
-      KK_Sahibi_GSM: paymentData.KK_Sahibi_GSM,
-      Hata_URL: paymentData.Hata_URL,
-      Basarili_URL: paymentData.Basarili_URL,
-      Siparis_ID: paymentData.Siparis_ID,
-      Siparis_Aciklama: paymentData.Siparis_Aciklama,
-      Taksit: paymentData.Taksit,
-      Islem_Tutar: paymentData.Islem_Tutar,
-      Toplam_Tutar: paymentData.Toplam_Tutar,
-      Islem_Hash: Islem_Hash,
-      Islem_Guvenlik_Tip: paymentData.Islem_Guvenlik_Tip || 'NS', // NS for non-secure
-      IPAdr: paymentData.IPAdr,
-      Ref_URL: paymentData.Ref_URL
-    };
-
-    console.log('📤 Sending TP_KK_Odeme request...');
-    const result = await this.makeSoapRequest('TP_KK_Odeme', soapRequestData);
-
-    console.log('📥 TP_KK_Odeme Response:', result);
-
-    return result;
-
-  } catch (error: any) {
-    console.error('❌ Saved card payment error:', error);
-    throw new Error('Kayıtlı kart ile ödeme başarısız: ' + error.message);
-  }
-}
-
-/**
- * Delete saved card
- */
-async deleteSavedCard(KS_GUID: string): Promise<{success: boolean; error?: string}> {
-  try {
-    console.log('🗑️ Deleting saved card...');
-
-    const soapRequestData = {
-      G: this.getAuthObject(),
-      GUID: this.guid,
-      KS_GUID: KS_GUID
-    };
-
-    console.log('📤 Sending TP_KK_Sil request...');
-    const result = await this.makeSoapRequest('TP_KK_Sil', soapRequestData);
-
-    console.log('📥 TP_KK_Sil Response:', result);
-
-    if (result && (result.Sonuc === '1' || result.Sonuc === 1)) {
-      return { success: true };
-    } else {
+    } catch (error: any) {
+      console.error('❌ Card saving error:', error);
       return {
         success: false,
-        error: result?.Sonuc_Str || result?.Sonuc_Aciklama || 'Kart silinemedi'
+        error: 'Kart kaydetme hatası: ' + error.message
       };
     }
+  }
 
-  } catch (error: any) {
-    console.error('❌ Card deletion error:', error);
-    return {
-      success: false,
-      error: 'Kart silme hatası: ' + error.message
-    };
+  async paymentWithSavedCard(paymentData: PaymentWithSavedCardData): Promise<any> {
+    try {
+      console.log('💳 Processing payment with saved card...');
+
+      const hashData = this.clientCode + this.guid + paymentData.Taksit +
+        paymentData.Islem_Tutar.replace(',', '.') +
+        paymentData.Toplam_Tutar.replace(',', '.') +
+        paymentData.Siparis_ID +
+        paymentData.Hata_URL +
+        paymentData.Basarili_URL;
+
+      const Islem_Hash = crypto.createHash('sha256').update(hashData, 'utf8').digest('base64');
+
+      console.log('✅ Saved card payment hash generated');
+
+      const soapRequestData = {
+        G: this.getAuthObject(),
+        GUID: this.guid,
+        KS_GUID: paymentData.KS_GUID,
+        KK_CVC: paymentData.CVV,
+        KK_Sahibi_GSM: paymentData.KK_Sahibi_GSM,
+        Hata_URL: paymentData.Hata_URL,
+        Basarili_URL: paymentData.Basarili_URL,
+        Siparis_ID: paymentData.Siparis_ID,
+        Siparis_Aciklama: paymentData.Siparis_Aciklama,
+        Taksit: paymentData.Taksit,
+        Islem_Tutar: paymentData.Islem_Tutar,
+        Toplam_Tutar: paymentData.Toplam_Tutar,
+        Islem_Hash: Islem_Hash,
+        Islem_Guvenlik_Tip: paymentData.Islem_Guvenlik_Tip || 'NS',
+        IPAdr: paymentData.IPAdr,
+        Ref_URL: paymentData.Ref_URL
+      };
+
+      console.log('📤 Sending TP_KK_Odeme request...');
+      const result = await this.makeSoapRequest('TP_KK_Odeme', soapRequestData);
+
+      console.log('📥 TP_KK_Odeme Response:', result);
+
+      return result;
+
+    } catch (error: any) {
+      console.error('❌ Saved card payment error:', error);
+      throw new Error('Kayıtlı kart ile ödeme başarısız: ' + error.message);
+    }
+  }
+
+  async deleteSavedCard(KS_GUID: string): Promise<{success: boolean; error?: string}> {
+    try {
+      console.log('🗑️ Deleting saved card...');
+
+      const soapRequestData = {
+        G: this.getAuthObject(),
+        GUID: this.guid,
+        KS_GUID: KS_GUID
+      };
+
+      console.log('📤 Sending TP_KK_Sil request...');
+      const result = await this.makeSoapRequest('TP_KK_Sil', soapRequestData);
+
+      console.log('📥 TP_KK_Sil Response:', result);
+
+      if (result && (result.Sonuc === '1' || result.Sonuc === 1)) {
+        return { success: true };
+      } else {
+        return {
+          success: false,
+          error: result?.Sonuc_Str || result?.Sonuc_Aciklama || 'Kart silinemedi'
+        };
+      }
+
+    } catch (error: any) {
+      console.error('❌ Card deletion error:', error);
+      return {
+        success: false,
+        error: 'Kart silme hatası: ' + error.message
+      };
+    }
+  }
+
+  async getSavedCards(): Promise<any> {
+    try {
+      console.log('📋 Getting saved cards list...');
+
+      const soapRequestData = {
+        G: this.getAuthObject(),
+        GUID: this.guid
+      };
+
+      console.log('📤 Sending TP_KK_Liste request...');
+      const result = await this.makeSoapRequest('TP_KK_Liste', soapRequestData);
+
+      console.log('📥 TP_KK_Liste Response:', result);
+
+      return result;
+
+    } catch (error: any) {
+      console.error('❌ Get saved cards error:', error);
+      throw new Error('Kayıtlı kartlar getirilemedi: ' + error.message);
+    }
   }
 }
 
-/**
- * Get saved cards list
- */
-async getSavedCards(): Promise<any> {
-  try {
-    console.log('📋 Getting saved cards list...');
-
-    const soapRequestData = {
-      G: this.getAuthObject(),
-      GUID: this.guid
-    };
-
-    console.log('📤 Sending TP_KK_Liste request...');
-    const result = await this.makeSoapRequest('TP_KK_Liste', soapRequestData);
-
-    console.log('📥 TP_KK_Liste Response:', result);
-
-    return result;
-
-  } catch (error: any) {
-    console.error('❌ Get saved cards error:', error);
-    throw new Error('Kayıtlı kartlar getirilemedi: ' + error.message);
-  }
-}
-
-}
-
-// ✅ UPDATED: Environment-based auth factory with new endpoint
 export function createParamAuth(): ParamAuth {
   const developmentMode = process.env.PARAM_DEVELOPMENT_MODE === 'true';
 
@@ -664,7 +615,6 @@ export function createParamAuth(): ParamAuth {
   let guid: string | undefined;
 
   if (developmentMode) {
-    // TEST environment
     baseUrl = process.env.PARAM_BASE_URL || 
       'https://test-dmz.param.com.tr:4443/turkpos.ws/service_turkpos_test.asmx';
     
@@ -679,7 +629,6 @@ export function createParamAuth(): ParamAuth {
     console.log(`  - Client Code: ${clientCode}`);
     console.log(`  - Terminal No: ${terminalNo}`);
   } else {
-    // PRODUCTION environment
     baseUrl = process.env.PARAM_PROD_BASE_URL || 
       'https://posweb.param.com.tr/turkpos.ws/service_turkpos_prod.asmx';
     
@@ -704,7 +653,6 @@ export function createParamAuth(): ParamAuth {
     baseUrl: baseUrl
   };
 
-  // Validate all required configuration
   const missingVars: string[] = [];
   if (!config.clientCode) missingVars.push('PARAM_CLIENT_CODE / PARAM_PROD_CLIENT_CODE');
   if (!config.clientUsername) missingVars.push('PARAM_CLIENT_USERNAME / PARAM_PROD_CLIENT_USERNAME');
@@ -725,7 +673,6 @@ export function createParamAuth(): ParamAuth {
   return new ParamAuth(config);
 }
 
-// Export types and class
 export { ParamAuth };
 export type { 
   ParamPaymentData, 
