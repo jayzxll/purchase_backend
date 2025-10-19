@@ -654,49 +654,75 @@ async getSavedCards(): Promise<any> {
 export function createParamAuth(): ParamAuth {
   const developmentMode = process.env.PARAM_DEVELOPMENT_MODE === 'true';
 
-  // ✅ UPDATED: Use the new endpoint from Param support
-  const baseUrl = developmentMode ?
-    'https://testposws.param.com.tr/turkpos.ws/service_turkpos_prod.asmx' : // Test endpoint
-    'https://posweb.param.com.tr/turkpos.ws/service_turkpos_prod.asmx';     // Production endpoint
+  console.log(`[Param Init] Mode: ${developmentMode ? 'TEST' : 'PRODUCTION'}`);
 
-  const config = {
-    clientCode: developmentMode ?
-      process.env.PARAM_CLIENT_CODE :
-      process.env.PARAM_PROD_CLIENT_CODE,
+  let baseUrl: string;
+  let clientCode: string | undefined;
+  let clientUsername: string | undefined;
+  let clientPassword: string | undefined;
+  let terminalNo: string | undefined;
+  let guid: string | undefined;
 
-    clientUsername: developmentMode ?
-      process.env.PARAM_CLIENT_USERNAME :
-      process.env.PARAM_PROD_CLIENT_USERNAME,
+  if (developmentMode) {
+    // TEST environment
+    baseUrl = process.env.PARAM_BASE_URL || 
+      'https://test-dmz.param.com.tr:4443/turkpos.ws/service_turkpos_test.asmx';
+    
+    clientCode = process.env.PARAM_CLIENT_CODE;
+    clientUsername = process.env.PARAM_CLIENT_USERNAME;
+    clientPassword = process.env.PARAM_CLIENT_PASSWORD;
+    terminalNo = process.env.PARAM_TERMINAL_NO;
+    guid = process.env.PARAM_GUID;
+    
+    console.log('[Param Init] Using TEST credentials:');
+    console.log(`  - Base URL: ${baseUrl}`);
+    console.log(`  - Client Code: ${clientCode}`);
+    console.log(`  - Terminal No: ${terminalNo}`);
+  } else {
+    // PRODUCTION environment
+    baseUrl = process.env.PARAM_PROD_BASE_URL || 
+      'https://posweb.param.com.tr/turkpos.ws/service_turkpos_prod.asmx';
+    
+    clientCode = process.env.PARAM_PROD_CLIENT_CODE;
+    clientUsername = process.env.PARAM_PROD_CLIENT_USERNAME;
+    clientPassword = process.env.PARAM_PROD_CLIENT_PASSWORD;
+    terminalNo = process.env.PARAM_PROD_TERMINAL_NO;
+    guid = process.env.PARAM_PROD_GUID;
+    
+    console.log('[Param Init] Using PRODUCTION credentials:');
+    console.log(`  - Base URL: ${baseUrl}`);
+    console.log(`  - Client Code: ${clientCode}`);
+    console.log(`  - Terminal No: ${terminalNo}`);
+  }
 
-    clientPassword: developmentMode ?
-      process.env.PARAM_CLIENT_PASSWORD :
-      process.env.PARAM_PROD_CLIENT_PASSWORD,
-
-    terminalNo: developmentMode ?
-      process.env.PARAM_TERMINAL_NO :
-      process.env.PARAM_PROD_TERMINAL_NO,
-
-    guid: developmentMode ? process.env.PARAM_GUID! : process.env.PARAM_PROD_GUID!,
-
+  const config: ParamAuthConfig = {
+    clientCode: clientCode!,
+    clientUsername: clientUsername!,
+    clientPassword: clientPassword!,
+    terminalNo: terminalNo!,
+    guid: guid!,
     baseUrl: baseUrl
   };
 
-  console.log('Param Auth Configuration:', {
-    clientCode: config.clientCode ? 'SET' : 'MISSING',
-    clientUsername: config.clientUsername ? 'SET' : 'MISSING',
-    baseUrl: config.baseUrl,
-    mode: developmentMode ? 'TEST' : 'PRODUCTION'
-  });
-
-  const missingVars = Object.entries(config)
-    .filter(([key, value]) => !value)
-    .map(([key]) => key);
+  // Validate all required configuration
+  const missingVars: string[] = [];
+  if (!config.clientCode) missingVars.push('PARAM_CLIENT_CODE / PARAM_PROD_CLIENT_CODE');
+  if (!config.clientUsername) missingVars.push('PARAM_CLIENT_USERNAME / PARAM_PROD_CLIENT_USERNAME');
+  if (!config.clientPassword) missingVars.push('PARAM_CLIENT_PASSWORD / PARAM_PROD_CLIENT_PASSWORD');
+  if (!config.terminalNo) missingVars.push('PARAM_TERMINAL_NO / PARAM_PROD_TERMINAL_NO');
+  if (!config.guid) missingVars.push('PARAM_GUID / PARAM_PROD_GUID');
+  if (!config.baseUrl) missingVars.push('PARAM_BASE_URL / PARAM_PROD_BASE_URL');
 
   if (missingVars.length > 0) {
-    throw new Error(`Missing Param configuration: ${missingVars.join(', ')}`);
+    const mode = developmentMode ? 'TEST' : 'PRODUCTION';
+    throw new Error(
+      `[Param Init] Missing ${mode} configuration variables:\n` +
+      missingVars.map(v => `  - ${v}`).join('\n')
+    );
   }
 
-  return new ParamAuth(config as ParamAuthConfig);
+  console.log('[Param Init] Configuration validated successfully');
+  return new ParamAuth(config);
 }
 
 // Export types and class

@@ -2621,6 +2621,38 @@ app.get('/api/debug/ip', async (req: Request, res: Response) => {
   }
 });
 
+app.get('/api/debug/param-full-check', (req: Request, res: Response) => {
+  try {
+    const isDev = process.env.PARAM_DEVELOPMENT_MODE === 'true';
+    
+    const check = {
+      mode: isDev ? 'TEST' : 'PRODUCTION',
+      testConfig: {
+        PARAM_DEVELOPMENT_MODE: process.env.PARAM_DEVELOPMENT_MODE,
+        PARAM_BASE_URL: process.env.PARAM_BASE_URL,
+        PARAM_CLIENT_CODE: process.env.PARAM_CLIENT_CODE || 'MISSING',
+        PARAM_CLIENT_USERNAME: process.env.PARAM_CLIENT_USERNAME || 'MISSING',
+        PARAM_CLIENT_PASSWORD: process.env.PARAM_CLIENT_PASSWORD ? '***SET***' : 'MISSING',
+        PARAM_GUID: process.env.PARAM_GUID || 'MISSING',
+        PARAM_TERMINAL_NO: process.env.PARAM_TERMINAL_NO || 'MISSING',
+        PARAM_SANAL_POS_ID: process.env.PARAM_SANAL_POS_ID || 'MISSING',
+      },
+      productionConfig: {
+        PARAM_PROD_CLIENT_CODE: process.env.PARAM_PROD_CLIENT_CODE || 'MISSING',
+        PARAM_PROD_CLIENT_USERNAME: process.env.PARAM_PROD_CLIENT_USERNAME || 'MISSING',
+        PARAM_PROD_CLIENT_PASSWORD: process.env.PARAM_PROD_CLIENT_PASSWORD ? '***SET***' : 'MISSING',
+        PARAM_PROD_GUID: process.env.PARAM_PROD_GUID || 'MISSING',
+        PARAM_PROD_TERMINAL_NO: process.env.PARAM_PROD_TERMINAL_NO || 'MISSING',
+        PARAM_PROD_BASE_URL: process.env.PARAM_PROD_BASE_URL,
+      }
+    };
+    
+    res.json(check);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ✅ YARDIMCI FONKSİYONLAR
 function validateCardDetails(cardData: any): { isValid: boolean; error?: string } {
   const { cardHolderName, cardNumber, cardExpMonth, cardExpYear } = cardData;
