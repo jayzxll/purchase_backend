@@ -2739,6 +2739,135 @@ app.get('/api/debug/request-ip', (req: Request, res: Response) => {
   });
 });
 
+// ✅ ENDPOINT 1: Full Debug Connection Test
+app.get('/api/param/debug-full', async (req: Request, res: Response) => {
+  try {
+    console.log('🔍 Starting full Param debug...\n');
+    
+    const paramAuth = createParamAuth();
+    const debugResult = await paramAuth.debugConnection();
+    
+    console.log('\n✅ Debug completed');
+    
+    res.json({
+      success: debugResult.success,
+      details: debugResult.details,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    console.error('❌ Debug failed:', error);
+    res.status(500).json({ 
+      error: error.message,
+      stack: error.stack 
+    });
+  }
+});
+
+// ✅ ENDPOINT 2: Compare SOAP Format with Param Example
+app.get('/api/param/compare-soap', async (req: Request, res: Response) => {
+  try {
+    const paramAuth = createParamAuth();
+    
+    // This will log to console
+    (paramAuth as any).compareWithParamExample();
+    
+    res.json({
+      message: 'Check Railway console logs for SOAP format comparison',
+      note: 'Look for "🔍 OUR SOAP FORMAT:" in the logs'
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ✅ ENDPOINT 3: Test Exact Param Example Data
+app.post('/api/param/test-exact-example', async (req: CustomRequest, res: Response) => {
+  try {
+    console.log('🧪 Testing with EXACT Param example data...\n');
+    
+    const paramAuth = createParamAuth();
+
+    // Use EXACT data from Param's working example
+    const testPaymentData: ParamPaymentData = {
+      SanalPOS_ID: '10738',
+      Doviz: 'TRY',
+      GUID: '0c13d406-873b-403b-9c09-a5766840d98c',
+      KK_Sahibi: 'paramtest paramtest',
+      KK_No: '5571135571135575',
+      KK_SK_Ay: '12',
+      KK_SK_Yil: '26', // ✅ Changed from 2026 to 26
+      KK_CVC: '000',
+      KK_Sahibi_GSM: '5555555555',
+      Hata_URL: 'https://webhook.site/397b86f9-56ad-4553-83c0-17171a3c4c70',
+      Basarili_URL: 'https://webhook.site/397b86f9-56ad-4553-83c0-17171a3c4c70',
+      Siparis_ID: `LEX_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+      Siparis_Aciklama: 'testaciklamaAlper',
+      Taksit: '1',
+      Islem_Tutar: '1000,00',
+      Toplam_Tutar: '1000,00',
+      Islem_ID: '',
+      IPAdr: '127.0.0.1',
+      Ref_URL: 'https://dev.param.com.tr/tr',
+      Data1: 'engintest@gmail.com',
+      Data2: '',
+      Data3: '',
+      Data4: '',
+      Data5: '',
+      Islem_Guvenlik_Tip: '3D'
+    };
+
+    console.log('📤 Sending test request with exact Param example data...');
+    const result = await paramAuth.processPaymentWith3DS(testPaymentData);
+
+    console.log('✅ Result received:', result);
+
+    res.json({
+      success: true,
+      result: result,
+      message: 'Test completed - check Railway logs for detailed SOAP request/response'
+    });
+
+  } catch (error: any) {
+    console.error('❌ Test failed:', error);
+    console.error('Error details:', {
+      message: error.message,
+      code: error.code,
+      response: error.response?.data
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      details: error.response?.data || error.code
+    });
+  }
+});
+
+// ✅ ENDPOINT 4: View Current Environment Config
+app.get('/api/param/view-config', (req: Request, res: Response) => {
+  const isDev = process.env.PARAM_DEVELOPMENT_MODE === 'true';
+  
+  res.json({
+    mode: isDev ? 'TEST' : 'PRODUCTION',
+    baseUrl: isDev 
+      ? process.env.PARAM_BASE_URL 
+      : process.env.PARAM_PROD_BASE_URL,
+    clientCode: isDev 
+      ? process.env.PARAM_CLIENT_CODE 
+      : process.env.PARAM_PROD_CLIENT_CODE,
+    guid: isDev 
+      ? process.env.PARAM_GUID 
+      : process.env.PARAM_PROD_GUID,
+    sanalPosId: process.env.PARAM_SANAL_POS_ID,
+    hasClientUsername: !!(isDev 
+      ? process.env.PARAM_CLIENT_USERNAME 
+      : process.env.PARAM_PROD_CLIENT_USERNAME),
+    hasClientPassword: !!(isDev 
+      ? process.env.PARAM_CLIENT_PASSWORD 
+      : process.env.PARAM_PROD_CLIENT_PASSWORD)
+  });
+});
+
 // ✅ YARDIMCI FONKSİYONLAR
 function validateCardDetails(cardData: any): { isValid: boolean; error?: string } {
   const { cardHolderName, cardNumber, cardExpMonth, cardExpYear } = cardData;
