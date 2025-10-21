@@ -104,9 +104,29 @@ if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && proc
 app.use(cors());
 app.use(express.json());
 
-// Health check
-app.get('/health', (req: Request, res: Response) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+// Health check - FIXED PATH
+app.get('/api/health', (req: Request, res: Response) => {
+  res.json({ 
+    status: 'OK', 
+    service: 'Purchase Backend API',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development',
+    version: '1.0.0'
+  });
+});
+
+// Root endpoint
+app.get('/', (req: Request, res: Response) => {
+  res.json({
+    message: '🚀 Purchase Backend API is running!',
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      health: 'GET /api/health',
+      paramTest: 'POST /api/param/test-exact-example',
+      lemonSqueezy: 'POST /api/lemonsqueezy/create-checkout'
+    },
+    version: '1.0.0'
+  });
 });
 
 // Authentication middleware
