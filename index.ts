@@ -129,6 +129,47 @@ app.get('/', (req: Request, res: Response) => {
   });
 });
 
+// Param configuration endpoint
+app.get('/api/param/config', (req: Request, res: Response) => {
+  const isDev = process.env.PARAM_DEVELOPMENT_MODE === 'true';
+  
+  // Mask sensitive information
+  const maskPassword = (password: string | undefined) => 
+    password ? '***' + password.slice(-4) : 'NOT SET';
+  
+  const config = {
+    mode: isDev ? 'TEST' : 'PRODUCTION',
+    baseUrl: isDev 
+      ? process.env.PARAM_BASE_URL 
+      : process.env.PARAM_PROD_BASE_URL,
+    clientCode: isDev 
+      ? process.env.PARAM_CLIENT_CODE 
+      : process.env.PARAM_PROD_CLIENT_CODE,
+    terminalNo: isDev 
+      ? process.env.PARAM_TERMINAL_NO 
+      : process.env.PARAM_PROD_TERMINAL_NO,
+    guid: isDev 
+      ? process.env.PARAM_GUID 
+      : process.env.PARAM_PROD_GUID,
+    sanalPosId: process.env.PARAM_SANAL_POS_ID,
+    hasClientUsername: !!(isDev 
+      ? process.env.PARAM_CLIENT_USERNAME 
+      : process.env.PARAM_PROD_CLIENT_USERNAME),
+    hasClientPassword: !!(isDev 
+      ? process.env.PARAM_CLIENT_PASSWORD 
+      : process.env.PARAM_PROD_CLIENT_PASSWORD),
+    frontendUrl: process.env.FRONTEND_URL,
+    nodeEnv: process.env.NODE_ENV,
+    timestamp: new Date().toISOString()
+  };
+
+  res.json({
+    success: true,
+    config: config,
+    note: 'Sensitive information masked for security'
+  });
+});
+
 // Authentication middleware
 const authMiddleware = async (req: CustomRequest, res: Response, next: NextFunction) => {
   try {
